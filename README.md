@@ -47,6 +47,17 @@ Najnoviji instalacioni APK nalazi se na stranici
   zahteva prema mreži: stavke sa vremenom kupovine, zbir po radnjama i zbir po
   vrstama radnji (marketi, pekare, apoteke, benzinske stanice i slično).
   Filteri za mesec, radnju i vrstu se slažu.
+- Proizvode razvrstava Gemini, ako se u podešavanjima unese lični API ključ.
+  Šalju se samo nazivi proizvoda, nikada iznosi, radnja, PIB ni broj računa.
+  Svaki naziv se pita najviše jednom: odgovor se pamti po ključu proizvoda,
+  bez interne šifre, pa isti hleb više ne troši nijedan zahtev. Bez ključa
+  aplikacija radi isto, samo bez kategorija.
+- Kategorije i oznake zdravlja (zdravo, umereno, nezdravo, nije hrana) imaju
+  svoje prikaze u pregledu, pa može da se vidi koliko je otišlo na slatkiše, a
+  koliko na osnovne namirnice.
+- Bekap je jedan JSON fajl sa svim računima i stavkama. Čuva se kroz sistemski
+  izbornik, na primer u Google Drive, i vraća se istim putem; zapisi koji već
+  postoje se prepoznaju i preskaču. Ključ i podešavanja nisu deo fajla.
 - Kodovi koji nisu fiskalni računi (interne nalepnice radnje) nemaju odakle
   da dobiju prodavnicu, iznos i stavke. Oni se prepoznaju, označavaju kao
   „Kôd bez podataka" i mogu da se obrišu odjednom, jednim dugmetom iznad

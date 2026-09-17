@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
 /** Jedina trajna istina aplikacije. Sve se upisuje pre pokušaja mrežne obrade. */
-class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
+class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
@@ -44,6 +44,7 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
                 "WHERE qr_sadrzaj <> ''"
         )
         napraviTabeluStavki(db)
+        napraviTabeluPojmova(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -83,6 +84,34 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
                     "WHERE qr_sadrzaj LIKE 'https://suf.purs.gov.rs/v/%'"
             )
         }
+        if (oldVersion < 4) {
+            // Baza sa verzije 3 već ima tabelu stavki, ali bez kolona za kategoriju.
+            dodajKolonu(db, "stavka", "kategorija")
+            dodajKolonu(db, "stavka", "zdravlje")
+            napraviTabeluPojmova(db)
+        }
+    }
+
+    private fun dodajKolonu(db: SQLiteDatabase, tabela: String, kolona: String) {
+        val postoji = db.rawQuery("PRAGMA table_info($tabela)", null).use { c ->
+            generateSequence { if (c.moveToNext()) c.getString(1) else null }.any { it == kolona }
+        }
+        if (!postoji) {
+            db.execSQL("ALTER TABLE $tabela ADD COLUMN $kolona TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
+    /** Jednom razvrstan proizvod se pamti po ključu, pa se model ne pita ponovo. */
+    private fun napraviTabeluPojmova(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS pojam (
+                kljuc TEXT PRIMARY KEY,
+                kategorija TEXT NOT NULL,
+                zdravlje TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
     }
 
     private fun napraviTabeluStavki(db: SQLiteDatabase) {
@@ -98,7 +127,9 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
                 poreska_osnovica_para INTEGER NOT NULL,
                 pdv_para INTEGER NOT NULL,
                 poreska_oznaka TEXT NOT NULL DEFAULT '',
-                poreska_stopa TEXT NOT NULL DEFAULT ''
+                poreska_stopa TEXT NOT NULL DEFAULT '',
+                kategorija TEXT NOT NULL DEFAULT '',
+                zdravlje TEXT NOT NULL DEFAULT ''
             )
             """.trimIndent()
         )
@@ -215,6 +246,9 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
                         put("pdv_para", stavka.pdvPara)
                         put("poreska_oznaka", stavka.poreskaOznaka)
                         put("poreska_stopa", stavka.poreskaStopa)
+                        val zapamceno = izKesa(db, LogikaRacuna.kljucProizvoda(stavka.naziv))
+                        put("kategorija", zapamceno?.kategorija.orEmpty())
+                        put("zdravlje", zapamceno?.zdravlje.orEmpty())
                     },
                 )
             }
@@ -223,6 +257,136 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
             db.endTransaction()
         }
     }
+
+    /** Nazivi proizvoda koje model još nije video, najviše koliko staje u jedan upit. */
+    fun nekategorisaniNazivi(najvise: Int): List<String> =
+        readableDatabase.rawQuery(
+            "SELECT DISTINCT naziv FROM stavka WHERE kategorija = '' AND naziv <> '' " +
+                "ORDER BY naziv LIMIT ?",
+            arrayOf(najvise.toString()),
+        ).use { c -> generateSequence { if (c.moveToNext()) c.getString(0) else null }.toList() }
+
+    fun brojStavki(): Int = jedanBroj("SELECT COUNT(*) FROM stavka")
+
+    fun brojKategorisanih(): Int =
+        jedanBroj("SELECT COUNT(*) FROM stavka WHERE kategorija <> ''")
+
+    fun kesPojma(kljuc: String): Pojam? = izKesa(readableDatabase, kljuc)
+
+    /** Upisuje odgovor modela: i u keš pojmova i u sve stavke sa tim nazivom. */
+    fun zapamtiKategoriju(naziv: String, kategorija: String, zdravlje: String) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.insertWithOnConflict(
+                "pojam",
+                null,
+                ContentValues().apply {
+                    put("kljuc", LogikaRacuna.kljucProizvoda(naziv))
+                    put("kategorija", kategorija)
+                    put("zdravlje", zdravlje)
+                },
+                SQLiteDatabase.CONFLICT_REPLACE,
+            )
+            db.update(
+                "stavka",
+                ContentValues().apply {
+                    put("kategorija", kategorija)
+                    put("zdravlje", zdravlje)
+                },
+                "naziv = ?",
+                arrayOf(naziv),
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Vraća koliko je zapisa dodato; postojeći se prepoznaju i preskaču. */
+    fun uvezi(racuni: List<Racun>): Int {
+        val db = writableDatabase
+        var dodato = 0
+        db.beginTransaction()
+        try {
+            for (racun in racuni) {
+                if (vecPostoji(db, racun)) continue
+                val id = db.insertOrThrow(
+                    "racun",
+                    null,
+                    ContentValues().apply {
+                        put("nastao", racun.nastao)
+                        put("izvor", racun.izvor)
+                        put("naziv", racun.naziv)
+                        put("qr_sadrzaj", racun.qrSadrzaj)
+                        put("tekst", racun.tekst)
+                        put("stanje", racun.stanje)
+                        put("greska", racun.greska)
+                        if (racun.datumRacuna == null) putNull("datum_racuna")
+                        else put("datum_racuna", racun.datumRacuna)
+                        put("pib", racun.pib)
+                        put("preduzece", racun.preduzece)
+                        put("prodajno_mesto", racun.prodajnoMesto)
+                        put("adresa", racun.adresa)
+                        put("grad", racun.grad)
+                        put("opstina", racun.opstina)
+                        if (racun.ukupanIznosPara == null) putNull("ukupan_iznos_para")
+                        else put("ukupan_iznos_para", racun.ukupanIznosPara)
+                        put("broj_racuna", racun.brojRacuna)
+                    },
+                )
+                for (stavka in racun.stavke) {
+                    db.insertOrThrow(
+                        "stavka",
+                        null,
+                        ContentValues().apply {
+                            put("racun_id", id)
+                            put("naziv", stavka.naziv)
+                            put("kolicina", stavka.kolicina)
+                            put("jedinicna_cena_para", stavka.jedinicnaCenaPara)
+                            put("ukupno_para", stavka.ukupnoPara)
+                            put("poreska_osnovica_para", stavka.poreskaOsnovicaPara)
+                            put("pdv_para", stavka.pdvPara)
+                            put("poreska_oznaka", stavka.poreskaOznaka)
+                            put("poreska_stopa", stavka.poreskaStopa)
+                            put("kategorija", stavka.kategorija)
+                            put("zdravlje", stavka.zdravlje)
+                        },
+                    )
+                }
+                dodato++
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return dodato
+    }
+
+    private fun vecPostoji(db: SQLiteDatabase, racun: Racun): Boolean {
+        val uslov = if (racun.qrSadrzaj.isNotBlank()) {
+            db.rawQuery(
+                "SELECT 1 FROM racun WHERE qr_sadrzaj = ? LIMIT 1",
+                arrayOf(racun.qrSadrzaj),
+            )
+        } else {
+            db.rawQuery(
+                "SELECT 1 FROM racun WHERE qr_sadrzaj = '' AND nastao = ? AND tekst = ? LIMIT 1",
+                arrayOf(racun.nastao.toString(), racun.tekst),
+            )
+        }
+        return uslov.use { it.moveToFirst() }
+    }
+
+    private fun izKesa(db: SQLiteDatabase, kljuc: String): Pojam? = db.rawQuery(
+        "SELECT kategorija, zdravlje FROM pojam WHERE kljuc = ? LIMIT 1",
+        arrayOf(kljuc),
+    ).use { c -> if (c.moveToFirst()) Pojam(c.getString(0), c.getString(1)) else null }
+
+    private fun jedanBroj(sql: String): Int =
+        readableDatabase.rawQuery(sql, null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    data class Pojam(val kategorija: String, val zdravlje: String)
 
     fun sacuvajGresku(id: Long, poruka: String) {
         writableDatabase.update(
@@ -271,8 +435,8 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
         val rezultat = ArrayList<Stavka>()
         readableDatabase.rawQuery(
             "SELECT naziv, kolicina, jedinicna_cena_para, ukupno_para, " +
-                "poreska_osnovica_para, pdv_para, poreska_oznaka, poreska_stopa " +
-                "FROM stavka WHERE racun_id = ? ORDER BY id",
+                "poreska_osnovica_para, pdv_para, poreska_oznaka, poreska_stopa, " +
+                "kategorija, zdravlje FROM stavka WHERE racun_id = ? ORDER BY id",
             arrayOf(racunId.toString()),
         ).use { c ->
             while (c.moveToNext()) {
@@ -286,6 +450,8 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
                         pdvPara = c.getLong(5),
                         poreskaOznaka = c.getString(6),
                         poreskaStopa = c.getString(7),
+                        kategorija = c.getString(8),
+                        zdravlje = c.getString(9),
                     )
                 )
             }

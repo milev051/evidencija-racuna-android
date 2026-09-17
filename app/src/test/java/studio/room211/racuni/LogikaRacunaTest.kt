@@ -3,6 +3,8 @@ package studio.room211.racuni
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Test
 
 class LogikaRacunaTest {
@@ -46,6 +48,65 @@ class LogikaRacunaTest {
         assertEquals("Benzinske stanice", LogikaRacuna.vrstaRadnje("NIS AD NOVI SAD"))
         assertEquals("Pekare i poslastičarnice", LogikaRacuna.vrstaRadnje("PEKARA TRPKOVIĆ"))
         assertEquals(LogikaRacuna.VRSTA_OSTALO, LogikaRacuna.vrstaRadnje("PARADIS KNJIŽARA"))
+    }
+
+    @Test fun kljucProizvodaSklanjaInternuSifru() {
+        assertEquals(
+            "SLADOLED ŠTAPIĆ JAGODA KRISP",
+            LogikaRacuna.kljucProizvoda("Sladoled štapić jagoda krisp/1013635"),
+        )
+        // Kosa crta usred naziva nije šifra, pa se ništa ne gubi.
+        assertEquals("1 2 MLEKO", LogikaRacuna.kljucProizvoda("1/2 mleko"))
+        assertEquals("HLEB SOMUN", LogikaRacuna.kljucProizvoda("  Hleb  somun  "))
+    }
+
+    @Test fun odgovorModelaSePrihvataSamoSaPoznatimVrednostima() {
+        val stavke = listOf(
+            """{"naziv":"Sladoled krisp","kategorija":"Slatkiši i grickalice","zdravlje":"nezdravo"}""",
+            """{"naziv":"Sapun","kategorija":"Izmišljena","zdravlje":"možda"}""",
+        ).joinToString(",", prefix = "[", postfix = "]")
+        val odgovor = JSONObject().put(
+            "candidates",
+            JSONArray().put(
+                JSONObject().put(
+                    "content",
+                    JSONObject().put("parts", JSONArray().put(JSONObject().put("text", stavke))),
+                )
+            ),
+        ).toString()
+
+        val procitano = Kategorije.procitajOdgovor(odgovor)
+        assertEquals("Slatkiši i grickalice", procitano["Sladoled krisp"]?.kategorija)
+        assertEquals("nezdravo", procitano["Sladoled krisp"]?.zdravlje)
+        // Nepoznata kategorija i oznaka ne smeju da uđu u bazu.
+        assertEquals("Ostalo", procitano["Sapun"]?.kategorija)
+        assertEquals("nije hrana", procitano["Sapun"]?.zdravlje)
+    }
+
+    @Test fun bekapPreziviPutUJsonINazad() {
+        val racun = prazanRacun(qrSadrzaj = "https://suf.purs.gov.rs/v/?vl=abc").copy(
+            preduzece = "LIDL SRBIJA KD",
+            datumRacuna = 1_757_000_000_000L,
+            ukupanIznosPara = 126999L,
+            stavke = listOf(
+                Stavka(
+                    naziv = "Sladoled krisp",
+                    kolicina = "1",
+                    jedinicnaCenaPara = 6999L,
+                    ukupnoPara = 6999L,
+                    poreskaOsnovicaPara = 5832L,
+                    pdvPara = 1167L,
+                    poreskaOznaka = "Ђ",
+                    poreskaStopa = "20",
+                    kategorija = "Slatkiši i grickalice",
+                    zdravlje = "nezdravo",
+                )
+            ),
+        )
+
+        val vraceni = Bekap.izJson(Bekap.kaoJson(listOf(racun)))
+        assertEquals(1, vraceni.size)
+        assertEquals(racun.copy(id = 0), vraceni.first())
     }
 
     private fun prazanRacun(qrSadrzaj: String, preduzece: String = ""): Racun = Racun(

@@ -55,11 +55,15 @@ object Ui {
         return kartica to unutra
     }
 
-    fun polje(context: Context, oznaka: String): Pair<TextInputLayout, TextInputEditText> {
+    fun polje(
+        context: Context,
+        oznaka: String,
+        redova: Int = 4,
+    ): Pair<TextInputLayout, TextInputEditText> {
         val unos = TextInputEditText(context).apply {
-            minLines = 4
-            maxLines = 8
-            gravity = android.view.Gravity.TOP
+            minLines = redova
+            maxLines = maxOf(redova * 2, 1)
+            if (redova > 1) gravity = android.view.Gravity.TOP
         }
         val okvir = TextInputLayout(
             context,

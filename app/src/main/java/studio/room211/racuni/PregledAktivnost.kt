@@ -29,7 +29,7 @@ import java.util.Locale
  * u Lidlu.
  */
 class PregledAktivnost : AppCompatActivity() {
-    private enum class Prikaz { STAVKE, RADNJE, VRSTE }
+    private enum class Prikaz { STAVKE, RADNJE, VRSTE, KATEGORIJE, ZDRAVLJE }
 
     private lateinit var baza: Baza
     private lateinit var sadrzaj: LinearLayout
@@ -42,6 +42,8 @@ class PregledAktivnost : AppCompatActivity() {
     private var mesec: String? = null
     private var radnja: String? = null
     private var vrsta: String? = null
+    private var kategorija: String? = null
+    private var zdravlje: String? = null
     private var racuni: List<Racun> = emptyList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,6 +108,12 @@ class PregledAktivnost : AppCompatActivity() {
                 izabrani.groupBy { LogikaRacuna.vrstaRadnje(nazivRadnje(it)) },
                 LogikaRacuna.VRSTA_OSTALO,
             ) { izabrana -> vrsta = izabrana; prikaz = Prikaz.STAVKE }
+            Prikaz.KATEGORIJE -> nacrtajZbiroveStavki(
+                izabraneStavke().groupBy { it.second.kategorija.ifBlank { NERAZVRSTANO } }
+            ) { izabrana -> kategorija = izabrana; prikaz = Prikaz.STAVKE }
+            Prikaz.ZDRAVLJE -> nacrtajZbiroveStavki(
+                izabraneStavke().groupBy { imeZdravlja(it.second.zdravlje) }
+            ) { izabrano -> zdravlje = izabrano; prikaz = Prikaz.STAVKE }
         }
     }
 
@@ -132,34 +140,45 @@ class PregledAktivnost : AppCompatActivity() {
             filteri.addView(grupa)
         }
 
-        if (radnja != null || vrsta != null) {
+        if (radnja != null || vrsta != null || kategorija != null || zdravlje != null) {
             val grupa = ChipGroup(this)
             radnja?.let { grupa.addView(cip("Radnja: $it", true) { radnja = null; osvezi() }) }
             vrsta?.let { grupa.addView(cip("Vrsta: $it", true) { vrsta = null; osvezi() }) }
+            kategorija?.let {
+                grupa.addView(cip("Kategorija: $it", true) { kategorija = null; osvezi() })
+            }
+            zdravlje?.let { grupa.addView(cip("Zdravlje: $it", true) { zdravlje = null; osvezi() }) }
             filteri.addView(maliTekst(this, "Klik na filter ga uklanja."))
             filteri.addView(grupa)
         }
     }
 
     private fun nacrtajStavke(izabrani: List<Racun>) {
-        val saStavkama = izabrani.filter { it.stavke.isNotEmpty() }
+        val saStavkama = izabrani
+            .map { racun -> racun to racun.stavke.filter { uKategoriji(it) } }
+            .filter { (_, stavke) -> stavke.isNotEmpty() }
         if (saStavkama.isEmpty()) {
             sadrzaj.addView(maliTekst(this, "Za izabrani filter nema pojedinačnih stavki."))
             return
         }
-        for (racun in saStavkama) {
+        for ((racun, stavke) in saStavkama) {
             val (kartica, unutra) = kartica(this)
             unutra.addView(TextView(this).apply {
                 text = datumStavke.format(Date(vreme(racun)))
                 setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
             })
             unutra.addView(maliTekst(this, LogikaRacuna.kratakNazivRadnje(nazivRadnje(racun))))
-            for (stavka in racun.stavke) {
+            for (stavka in stavke) {
                 unutra.addView(vrednost(this, "• ${stavka.naziv}"))
-                unutra.addView(
-                    maliTekst(this, "${stavka.kolicina} × ${dinari(stavka.jedinicnaCenaPara)} = ${dinari(stavka.ukupnoPara)}")
-                        .apply { setPadding(dp(14), 0, 0, dp(6)) }
-                )
+                val opis = buildString {
+                    append(stavka.kolicina).append(" × ").append(dinari(stavka.jedinicnaCenaPara))
+                    append(" = ").append(dinari(stavka.ukupnoPara))
+                    if (stavka.kategorija.isNotBlank()) {
+                        append("\n").append(stavka.kategorija)
+                        if (stavka.zdravlje.isNotBlank()) append(" • ").append(stavka.zdravlje)
+                    }
+                }
+                unutra.addView(maliTekst(this, opis).apply { setPadding(dp(14), 0, 0, dp(6)) })
             }
             unutra.addView(maliTekst(this, "Račun: ${dinari(zbir(racun))}"))
             sadrzaj.addView(kartica)
@@ -196,6 +215,52 @@ class PregledAktivnost : AppCompatActivity() {
         }
     }
 
+    private fun nacrtajZbiroveStavki(
+        grupe: Map<String, List<Pair<Racun, Stavka>>>,
+        klik: (String) -> Unit,
+    ) {
+        if (grupe.isEmpty()) {
+            sadrzaj.addView(maliTekst(this, "Za izabrani filter nema stavki."))
+            return
+        }
+        val poredak = grupe.entries.sortedByDescending { red -> red.value.sumOf { it.second.ukupnoPara } }
+        for ((ime, stavke) in poredak) {
+            val (kartica, unutra) = kartica(this)
+            unutra.addView(TextView(this).apply {
+                text = ime
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
+            })
+            unutra.addView(vrednost(this, dinari(stavke.sumOf { it.second.ukupnoPara })))
+            unutra.addView(maliTekst(this, "Stavki: ${stavke.size}"))
+            kartica.isClickable = true
+            kartica.isFocusable = true
+            kartica.setOnClickListener {
+                klik(ime)
+                osvezi()
+            }
+            sadrzaj.addView(kartica)
+        }
+        if (poredak.any { it.key == NERAZVRSTANO }) {
+            sadrzaj.addView(maliTekst(
+                this,
+                "Nerazvrstano čeka da se u podešavanjima unese Gemini ključ i da se pojavi internet.",
+            ))
+        }
+    }
+
+    private fun izabraneStavke(): List<Pair<Racun, Stavka>> =
+        izabraniRacuni().flatMap { racun -> racun.stavke.map { racun to it } }
+
+    private fun uKategoriji(stavka: Stavka): Boolean {
+        val poKategoriji = kategorija == null ||
+            stavka.kategorija.ifBlank { NERAZVRSTANO } == kategorija
+        val poZdravlju = zdravlje == null || imeZdravlja(stavka.zdravlje) == zdravlje
+        return poKategoriji && poZdravlju
+    }
+
+    private fun imeZdravlja(oznaka: String): String = oznaka.ifBlank { NERAZVRSTANO }
+        .replaceFirstChar { it.uppercase(Locale("sr", "RS")) }
+
     private fun izabraniRacuni(): List<Racun> = racuni.filter { racun ->
         val uMesecu = mesec == null || kljucMeseca.format(Date(vreme(racun))) == mesec
         val uRadnji = radnja == null ||
@@ -215,6 +280,8 @@ class PregledAktivnost : AppCompatActivity() {
         Prikaz.STAVKE -> "Stavke"
         Prikaz.RADNJE -> "Radnje"
         Prikaz.VRSTE -> "Vrste radnji"
+        Prikaz.KATEGORIJE -> "Kategorije"
+        Prikaz.ZDRAVLJE -> "Zdravlje"
     }
 
     private fun imeMeseca(kljuc: String): String {
@@ -235,4 +302,8 @@ class PregledAktivnost : AppCompatActivity() {
         racun.ukupanIznosPara ?: racun.stavke.sumOf { it.ukupnoPara }
 
     private fun vreme(racun: Racun): Long = racun.datumRacuna ?: racun.nastao
+
+    private companion object {
+        const val NERAZVRSTANO = "Nerazvrstano"
+    }
 }

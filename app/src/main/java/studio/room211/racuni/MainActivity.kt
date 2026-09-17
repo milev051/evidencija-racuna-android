@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var stanje: TextView
     private val datum = SimpleDateFormat("dd.MM.yyyy. HH:mm", Locale("sr", "RS"))
     private val datumSaSekundama = SimpleDateFormat("dd.MM.yyyy. HH:mm:ss", Locale("sr", "RS"))
+    private val imeFajla = SimpleDateFormat("yyyy-MM-dd", Locale("sr", "RS"))
     private val izvrsilacUvoza = Executors.newSingleThreadExecutor()
 
     private val skener = registerForActivityResult(ScanContract()) { rezultat ->
@@ -65,6 +66,16 @@ class MainActivity : AppCompatActivity() {
             ).show()
         }
     }
+
+    private val izvozBekapa =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { gde ->
+            if (gde != null) sacuvajBekap(gde)
+        }
+
+    private val vracanjeBekapa =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { odakle ->
+            if (odakle != null) vratiBekap(odakle)
+        }
 
     private val dozvolaZaObavestenja =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -103,6 +114,7 @@ class MainActivity : AppCompatActivity() {
         koren.addView(dugme(this, "Pregled kupovina") {
             startActivity(Intent(this, PregledAktivnost::class.java))
         })
+        koren.addView(dugme(this, "Podešavanja i bekap") { podesavanja() })
         koren.addView(rucniUnos())
 
         stanje = maliTekst(this, "")
@@ -277,6 +289,132 @@ class MainActivity : AppCompatActivity() {
                 Obavestenja.ukloni(this@MainActivity)
             })
         }
+    }
+
+    private fun podesavanja() {
+        val stubac = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(4), dp(24), dp(4))
+        }
+
+        stubac.addView(odeljak(this, "Razvrstavanje proizvoda"))
+        stubac.addView(maliTekst(
+            this,
+            "Nazivi proizvoda se šalju Gemini-ju da ih svrsta u kategorije i označi " +
+                "kao zdravo, umereno ili nezdravo. Šalju se samo nazivi, nikada iznosi, " +
+                "radnja, PIB ni broj računa. Svaki naziv se pita najviše jednom. " +
+                "Ključ se pravi na aistudio.google.com i ostaje samo na ovom telefonu.",
+        ))
+        val (okvirKljuca, unosKljuca) = polje(this, "Gemini API ključ", redova = 1)
+        unosKljuca.setText(Podesavanja.geminiKljuc(this))
+        stubac.addView(okvirKljuca)
+        val (okvirModela, unosModela) = polje(this, "Model", redova = 1)
+        unosModela.setText(Podesavanja.geminiModel(this))
+        stubac.addView(okvirModela)
+
+        val ukupnoStavki = baza.brojStavki()
+        val razvrstano = baza.brojKategorisanih()
+        stubac.addView(maliTekst(this, "Razvrstano: $razvrstano od $ukupnoStavki stavki."))
+        val greska = Podesavanja.greskaKategorija(this)
+        if (greska.isNotBlank()) {
+            stubac.addView(maliTekst(this, "Poslednja greška: $greska"))
+        }
+
+        stubac.addView(odeljak(this, "Bekap"))
+        stubac.addView(maliTekst(
+            this,
+            "Bekap je jedan JSON fajl sa svim računima i stavkama. Pri čuvanju biraš " +
+                "gde ide, na primer u Google Drive. Ključ i podešavanja nisu deo fajla.",
+        ))
+        stubac.addView(dugme(this, "Sačuvaj bekap") {
+            izvozBekapa.launch("racuni-${imeFajla.format(Date())}.json")
+        })
+        stubac.addView(dugme(this, "Vrati iz bekapa") {
+            vracanjeBekapa.launch(arrayOf("application/json", "text/plain", "*/*"))
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle("Podešavanja i bekap")
+            .setView(ScrollView(this).apply { addView(stubac) })
+            .setPositiveButton("Sačuvaj") { _, _ ->
+                Podesavanja.sacuvajGemini(
+                    this,
+                    unosKljuca.text?.toString().orEmpty(),
+                    unosModela.text?.toString().orEmpty(),
+                )
+                Podesavanja.zapisiGresku(this, "")
+                // Razvrstavanje kreće čim ima mreže.
+                ObradaRacuna.zakazi(this)
+                Toast.makeText(this, "Podešavanja su sačuvana", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Zatvori", null)
+            .show()
+    }
+
+    private fun sacuvajBekap(gde: Uri) {
+        val kontekst = applicationContext
+        izvrsilacUvoza.execute {
+            val ishod = runCatching {
+                val bazaIzvoza = Baza(kontekst)
+                val tekst = try {
+                    Bekap.kaoJson(bazaIzvoza.svi())
+                } finally {
+                    bazaIzvoza.close()
+                }
+                kontekst.contentResolver.openOutputStream(gde, "wt")
+                    ?.use { it.write(tekst.toByteArray(Charsets.UTF_8)) }
+                    ?: error("Nije moguće pisati u izabrani fajl")
+                tekst.length
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                ishod.onSuccess {
+                    Toast.makeText(this, "Bekap je sačuvan", Toast.LENGTH_SHORT).show()
+                }.onFailure {
+                    porukaOGresci("Bekap nije sačuvan", it)
+                }
+            }
+        }
+    }
+
+    private fun vratiBekap(odakle: Uri) {
+        val kontekst = applicationContext
+        izvrsilacUvoza.execute {
+            val ishod = runCatching {
+                val tekst = kontekst.contentResolver.openInputStream(odakle)
+                    ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                    ?: error("Fajl nije moguće pročitati")
+                val racuni = Bekap.izJson(tekst)
+                val bazaUvoza = Baza(kontekst)
+                try {
+                    bazaUvoza.uvezi(racuni) to racuni.size
+                } finally {
+                    bazaUvoza.close()
+                }
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                ishod.onSuccess { (dodato, ukupno) ->
+                    if (dodato > 0) ObradaRacuna.zakazi(this)
+                    osvezi()
+                    Toast.makeText(
+                        this,
+                        "Vraćeno: $dodato • već postojalo: ${ukupno - dodato}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }.onFailure {
+                    porukaOGresci("Bekap nije vraćen", it)
+                }
+            }
+        }
+    }
+
+    private fun porukaOGresci(naslov: String, greska: Throwable) {
+        AlertDialog.Builder(this)
+            .setTitle(naslov)
+            .setMessage(greska.message ?: greska.javaClass.simpleName)
+            .setPositiveButton("U redu", null)
+            .show()
     }
 
     private fun rucniUnos(): ViewGroup {

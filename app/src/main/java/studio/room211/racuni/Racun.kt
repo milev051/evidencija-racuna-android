@@ -30,6 +30,9 @@ data class Stavka(
     val pdvPara: Long,
     val poreskaOznaka: String,
     val poreskaStopa: String,
+    /** Popunjava se naknadno, kada model razvrsta proizvode. */
+    val kategorija: String = "",
+    val zdravlje: String = "",
 )
 
 data class AnalizaRacuna(
@@ -126,6 +129,19 @@ object LogikaRacuna {
 
     // (?U) je potrebno da bi Ć i Š bili slova, pa granica reči radi i na srpskom.
     private fun celaRec(rec: String) = Regex("(?U)\\b" + Regex.escape(rec) + "\\b")
+
+    /**
+     * Isti proizvod se na računima pojavljuje sa internim šifrom na kraju
+     * („Sladoled štapić jagoda krisp/1013635"). Ključ sklanja šifru, pa se
+     * jednom razvrstan proizvod nikada ne razvrstava ponovo.
+     */
+    fun kljucProizvoda(naziv: String): String = naziv
+        // Sklanja se samo šifra na kraju, da „1/2 mleko" ostane čitavo.
+        .replace(Regex("/\\s*\\d+\\s*$"), "")
+        .replace(Regex("(?U)[^\\p{L}\\p{N} ]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .uppercase(SRPSKI)
 
     fun rucniNaziv(tekst: String): String = tekst
         .lineSequence()

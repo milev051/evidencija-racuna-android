@@ -38,6 +38,13 @@ class ObradaRacuna(context: Context, params: WorkerParameters) : Worker(context,
                 baza.sacuvajGresku(racun.id, e.message ?: e.javaClass.simpleName)
             }
         }
+        // Razvrstavanje ide posle preuzimanja, da model dobije i nove stavke.
+        try {
+            Kategorije.dopuni(applicationContext, baza)
+        } catch (e: Exception) {
+            Podesavanja.zapisiGresku(applicationContext, e.message ?: e.javaClass.simpleName)
+        }
+
         baza.close()
         return if (neuspeh) Result.retry() else Result.success()
     }
