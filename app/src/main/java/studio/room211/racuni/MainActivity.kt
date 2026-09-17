@@ -3,6 +3,7 @@ package studio.room211.racuni
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -14,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.setPadding
 import androidx.work.WorkManager
 import com.google.android.material.color.DynamicColors
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import studio.room211.racuni.Ui.dp
@@ -21,7 +23,9 @@ import studio.room211.racuni.Ui.dugme
 import studio.room211.racuni.Ui.jednako
 import studio.room211.racuni.Ui.kartica
 import studio.room211.racuni.Ui.maliTekst
+import studio.room211.racuni.Ui.odeljak
 import studio.room211.racuni.Ui.polje
+import studio.room211.racuni.Ui.vrednost
 import java.text.SimpleDateFormat
 import java.text.NumberFormat
 import java.util.Date
@@ -32,7 +36,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var baza: Baza
     private lateinit var spisak: LinearLayout
     private lateinit var stanje: TextView
-    private val datum = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale("sr", "RS"))
+    private val datum = SimpleDateFormat("dd.MM.yyyy. HH:mm", Locale("sr", "RS"))
+    private val datumSaSekundama = SimpleDateFormat("dd.MM.yyyy. HH:mm:ss", Locale("sr", "RS"))
     private val novac = NumberFormat.getCurrencyInstance(Locale("sr", "RS"))
     private val izvrsilacUvoza = Executors.newSingleThreadExecutor()
 
@@ -127,11 +132,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun uveziSlike(slike: List<Uri>) {
-        Toast.makeText(
-            this,
-            "Tražim fiskalne QR kodove u ${slike.size} izabranih slika…",
-            Toast.LENGTH_SHORT,
-        ).show()
+        // Traženje QR koda po velikoj fotografiji traje i po nekoliko sekundi,
+        // pa se ceo tok vidi na ekranu umesto da aplikacija deluje zaglavljeno.
+        val napredak = NapredakUvoza(slike.size)
         val kontekst = applicationContext
         izvrsilacUvoza.execute {
             var novi = 0
@@ -142,24 +145,28 @@ class MainActivity : AppCompatActivity() {
             val bazaUvoza = Baza(kontekst)
             val citac = QrIzGalerije()
             try {
-                for (slika in slike) {
+                for ((redni, slika) in slike.withIndex()) {
+                    runOnUiThread { napredak.naSlici(redni, novi) }
                     try {
                         val kodovi = citac.procitaj(kontekst, slika)
                         if (kodovi.isEmpty()) {
                             bezQr++
-                            continue
-                        }
-                        for (kod in kodovi) {
-                            if (bazaUvoza.dodajQr(kod) == -1L) {
-                                duplikati++
-                            } else {
-                                novi++
-                                trebaMreza = true
+                        } else {
+                            for (kod in kodovi) {
+                                if (bazaUvoza.dodajQr(kod) == -1L) {
+                                    duplikati++
+                                } else {
+                                    novi++
+                                    trebaMreza = true
+                                }
                             }
                         }
                     } catch (_: Exception) {
                         neispravne++
                     }
+                    val zavrseno = redni + 1
+                    val nadjeno = novi
+                    runOnUiThread { napredak.zavrsenaSlika(zavrseno, nadjeno) }
                 }
             } finally {
                 citac.close()
@@ -168,6 +175,7 @@ class MainActivity : AppCompatActivity() {
 
             if (trebaMreza) ObradaRacuna.zakazi(kontekst)
             runOnUiThread {
+                napredak.zatvori()
                 if (isDestroyed) return@runOnUiThread
                 osvezi()
                 val poruka = buildString {
@@ -187,6 +195,60 @@ class MainActivity : AppCompatActivity() {
                     .setPositiveButton("U redu", null)
                     .show()
             }
+        }
+    }
+
+    /** Prozor koji tokom grupnog uvoza pokazuje koja je slika na redu. */
+    private inner class NapredakUvoza(private val ukupno: Int) {
+        private val korak = TextView(this@MainActivity).apply {
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
+            text = pocetniTekst()
+        }
+        private val traka = LinearProgressIndicator(this@MainActivity).apply {
+            // Kod jedne slike nema šta da se puni, pa traka samo pokazuje da rad traje.
+            isIndeterminate = ukupno <= 1
+            max = maxOf(ukupno, 1)
+            progress = 0
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(14) }
+        }
+        private val nalaz = maliTekst(this@MainActivity, "Pronađenih računa: 0").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(12) }
+        }
+        private val dijalog = AlertDialog.Builder(this@MainActivity)
+            .setTitle("Tražim QR kodove")
+            .setView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(24), dp(18), dp(24), dp(4))
+                addView(korak)
+                addView(traka)
+                addView(nalaz)
+            })
+            .setCancelable(false)
+            .create()
+            .also { it.show() }
+
+        private fun pocetniTekst() =
+            if (ukupno == 1) "Skeniram sliku…" else "Skeniram sliku 1 od $ukupno…"
+
+        fun naSlici(redni: Int, pronadjeno: Int) {
+            korak.text =
+                if (ukupno == 1) "Skeniram sliku…" else "Skeniram sliku ${redni + 1} od $ukupno…"
+            nalaz.text = "Pronađenih računa: $pronadjeno"
+        }
+
+        fun zavrsenaSlika(zavrseno: Int, pronadjeno: Int) {
+            if (!traka.isIndeterminate) traka.setProgressCompat(zavrseno, true)
+            nalaz.text = "Pronađenih računa: $pronadjeno"
+        }
+
+        fun zatvori() {
+            if (dijalog.isShowing && !isFinishing && !isDestroyed) dijalog.dismiss()
         }
     }
 
@@ -235,64 +297,115 @@ class MainActivity : AppCompatActivity() {
         for (racun in racuni) spisak.addView(redRacuna(racun))
     }
 
+    /** U spisku stoje samo vreme, mesto i iznos; ostalo se otvara klikom. */
     private fun redRacuna(racun: Racun): ViewGroup {
         val (kartica, unutra) = kartica(this)
-        val vreme = racun.datumRacuna ?: racun.nastao
-        val naziv = racun.preduzece.ifBlank { racun.prodajnoMesto }.ifBlank { racun.naziv }
-        val vremeINaziv = "${datum.format(Date(vreme))} — $naziv"
         unutra.addView(TextView(this).apply {
-            text = vremeINaziv
+            text = datum.format(Date(racun.datumRacuna ?: racun.nastao))
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
         })
-        var opis = when (racun.stanje) {
-            LogikaRacuna.CEKA_MREZU -> "Čeka internet da preuzme digitalni format"
-            LogikaRacuna.GRESKA -> "Sačuvan QR; obrada će biti ponovljena"
-            else -> if (racun.izvor == LogikaRacuna.IZVOR_QR) "QR obrađen i sačuvan" else "Ručni unos"
+        unutra.addView(vrednost(this, nazivRacuna(racun)))
+        val mesto = kratkaLokacija(racun)
+        if (mesto.isNotBlank()) unutra.addView(maliTekst(this, mesto))
+
+        val dodatno = buildString {
+            if (racun.ukupanIznosPara != null) append(prikaziNovac(racun.ukupanIznosPara))
+            if (racun.stavke.isNotEmpty()) {
+                if (isNotEmpty()) append(" • ")
+                append("stavki: ").append(racun.stavke.size)
+            }
+            val cekanje = when (racun.stanje) {
+                LogikaRacuna.CEKA_MREZU -> "čeka internet"
+                LogikaRacuna.GRESKA -> "obrada se ponavlja"
+                else -> ""
+            }
+            if (cekanje.isNotBlank()) {
+                if (isNotEmpty()) append(" • ")
+                append(cekanje)
+            }
         }
-        if (racun.ukupanIznosPara != null) opis += " • ${prikaziNovac(racun.ukupanIznosPara)}"
-        if (racun.stavke.isNotEmpty()) opis += " • stavki: ${racun.stavke.size}"
-        unutra.addView(maliTekst(this, opis))
+        if (dodatno.isNotBlank()) {
+            unutra.addView(maliTekst(this, dodatno).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(6) }
+            })
+        }
+
         kartica.isClickable = true
         kartica.isFocusable = true
-        kartica.setOnClickListener { prikaziDetalje(racun, vremeINaziv) }
+        kartica.setOnClickListener { prikaziRacun(racun) }
         return kartica
     }
 
-    private fun prikaziDetalje(racun: Racun, naslov: String) {
-        val tekst = buildString {
-            if (racun.preduzece.isNotBlank()) append("Preduzeće: ").append(racun.preduzece).append('\n')
-            if (racun.prodajnoMesto.isNotBlank()) append("Prodajno mesto: ").append(racun.prodajnoMesto).append('\n')
-            if (racun.adresa.isNotBlank()) append("Adresa: ").append(racun.adresa).append('\n')
-            if (racun.grad.isNotBlank()) append("Grad: ").append(racun.grad).append('\n')
-            if (racun.opstina.isNotBlank()) append("Opština: ").append(racun.opstina).append('\n')
-            if (racun.pib.isNotBlank()) append("PIB: ").append(racun.pib).append('\n')
-            if (racun.datumRacuna != null) append("Vreme računa: ").append(datum.format(Date(racun.datumRacuna))).append('\n')
-            if (racun.ukupanIznosPara != null) append("Ukupno: ").append(prikaziNovac(racun.ukupanIznosPara)).append('\n')
-            if (racun.brojRacuna.isNotBlank()) append("Broj računa: ").append(racun.brojRacuna).append('\n')
-            if (racun.stavke.isNotEmpty()) {
-                append("\nStavke:\n")
-                for (stavka in racun.stavke) {
-                    append("• ").append(stavka.naziv)
-                        .append("\n  ").append(stavka.kolicina).append(" × ")
-                        .append(prikaziNovac(stavka.jedinicnaCenaPara))
-                        .append(" = ").append(prikaziNovac(stavka.ukupnoPara)).append('\n')
-                }
-            } else if (racun.tekst.isNotBlank()) {
-                append(racun.tekst)
+    /** Klik na račun: prvo vreme, pa lokacija, pa kupljene stavke. */
+    private fun prikaziRacun(racun: Racun) {
+        val stubac = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(4), dp(24), dp(4))
+        }
+
+        stubac.addView(odeljak(this, "Vreme"))
+        stubac.addView(vrednost(this, datumSaSekundama.format(Date(racun.datumRacuna ?: racun.nastao))))
+        if (racun.datumRacuna == null) {
+            stubac.addView(maliTekst(this, "Vreme unosa u aplikaciju; vreme sa računa još nije preuzeto."))
+        }
+
+        stubac.addView(odeljak(this, "Lokacija"))
+        val lokacija = punaLokacija(racun)
+        if (lokacija.isNotBlank()) {
+            stubac.addView(vrednost(this, lokacija))
+        } else {
+            stubac.addView(maliTekst(this, "Lokacija će se pojaviti kada račun bude obrađen."))
+        }
+
+        if (racun.stavke.isNotEmpty()) {
+            stubac.addView(odeljak(this, "Stavke (${racun.stavke.size})"))
+            for (stavka in racun.stavke) {
+                stubac.addView(vrednost(this, "• ${stavka.naziv}"))
+                stubac.addView(maliTekst(
+                    this,
+                    "${stavka.kolicina} × ${prikaziNovac(stavka.jedinicnaCenaPara)}" +
+                        " = ${prikaziNovac(stavka.ukupnoPara)}",
+                ).apply { setPadding(dp(14), 0, 0, dp(6)) })
             }
-            if (racun.qrSadrzaj.isNotBlank() && racun.qrSadrzaj != racun.tekst) {
-                if (isNotEmpty()) append("\n\n")
-                append("QR sadržaj:\n").append(racun.qrSadrzaj)
-            }
-            if (racun.greska.isNotBlank()) append("\n\nPoslednja greška:\n").append(racun.greska)
-        }.ifBlank { "Podaci su sačuvani i čekaju obradu." }
+        } else if (racun.tekst.isNotBlank() && racun.izvor == LogikaRacuna.IZVOR_RUCNO) {
+            stubac.addView(odeljak(this, "Beleška"))
+            stubac.addView(vrednost(this, racun.tekst))
+        } else {
+            stubac.addView(odeljak(this, "Stavke"))
+            stubac.addView(maliTekst(this, kadaStizuStavke(racun)))
+        }
+
+        if (racun.ukupanIznosPara != null) {
+            stubac.addView(odeljak(this, "Ukupno"))
+            stubac.addView(TextView(this).apply {
+                text = prikaziNovac(racun.ukupanIznosPara)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
+            })
+        }
+
+        val tehnicki = jednako(this, tehnickiPodaci(racun)).apply {
+            visibility = View.GONE
+            setPadding(0, dp(8), 0, 0)
+        }
+        val prekidac = dugme(this, "Prikaži detalje") {}
+        prekidac.setOnClickListener {
+            val bioVidljiv = tehnicki.visibility == View.VISIBLE
+            tehnicki.visibility = if (bioVidljiv) View.GONE else View.VISIBLE
+            prekidac.text = if (bioVidljiv) "Prikaži detalje" else "Sakrij detalje"
+        }
+        prekidac.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(18) }
+        stubac.addView(prekidac)
+        stubac.addView(tehnicki)
 
         val dijalog = AlertDialog.Builder(this)
-            .setTitle(naslov)
-            .setView(ScrollView(this).apply {
-                setPadding(dp(22))
-                addView(jednako(this@MainActivity, tekst))
-            })
+            .setTitle(nazivRacuna(racun))
+            .setView(ScrollView(this).apply { addView(stubac) })
             .setPositiveButton("Zatvori", null)
 
         if (LogikaRacuna.internetAdresa(racun.qrSadrzaj)) {
@@ -302,6 +415,80 @@ class MainActivity : AppCompatActivity() {
         }
         dijalog.show()
     }
+
+    private fun nazivRacuna(racun: Racun): String =
+        racun.preduzece.ifBlank { racun.prodajnoMesto }.ifBlank { racun.naziv }
+
+    /** Jedan red za spisak: prodajno mesto i grad, bez ponavljanja naziva firme. */
+    private fun kratkaLokacija(racun: Racun): String {
+        val naziv = nazivRacuna(racun)
+        return listOf(racun.prodajnoMesto, racun.grad)
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.equals(naziv, ignoreCase = true) }
+            .distinct()
+            .joinToString(", ")
+    }
+
+    private fun punaLokacija(racun: Racun): String = buildString {
+        val naziv = nazivRacuna(racun)
+        if (racun.prodajnoMesto.isNotBlank() && !racun.prodajnoMesto.equals(naziv, ignoreCase = true)) {
+            append(racun.prodajnoMesto).append('\n')
+        }
+        if (racun.adresa.isNotBlank()) append(racun.adresa).append('\n')
+        val mesto = listOf(racun.grad, racun.opstina)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString(", ")
+        if (mesto.isNotBlank()) append(mesto)
+    }.trim()
+
+    private fun kadaStizuStavke(racun: Racun): String = when {
+        racun.izvor == LogikaRacuna.IZVOR_RUCNO -> "Ručni unos nema pojedinačne stavke."
+        racun.stanje == LogikaRacuna.GRESKA -> "Obrada nije uspela; biće ponovljena."
+        else -> "Stavke stižu kada aplikacija dobije internet i preuzme digitalni račun."
+    }
+
+    /** Sve ostalo, iza dugmeta „Prikaži detalje". */
+    private fun tehnickiPodaci(racun: Racun): String = buildString {
+        if (racun.preduzece.isNotBlank()) append("Preduzeće: ").append(racun.preduzece).append('\n')
+        if (racun.pib.isNotBlank()) append("PIB: ").append(racun.pib).append('\n')
+        if (racun.brojRacuna.isNotBlank()) append("Broj računa: ").append(racun.brojRacuna).append('\n')
+        append("Sačuvano u aplikaciji: ").append(datumSaSekundama.format(Date(racun.nastao))).append('\n')
+        append("Izvor: ")
+            .append(if (racun.izvor == LogikaRacuna.IZVOR_QR) "QR kôd" else "ručni unos")
+            .append('\n')
+        append("Stanje: ").append(
+            when (racun.stanje) {
+                LogikaRacuna.CEKA_MREZU -> "čeka internet"
+                LogikaRacuna.GRESKA -> "greška, obrada se ponavlja"
+                else -> "obrađeno"
+            }
+        ).append('\n')
+        if (racun.stavke.isNotEmpty()) {
+            append("\nPorezi po stavkama:\n")
+            for (stavka in racun.stavke) {
+                append("• ").append(stavka.naziv).append('\n')
+                append("  osnovica ").append(prikaziNovac(stavka.poreskaOsnovicaPara))
+                    .append(", PDV ").append(prikaziNovac(stavka.pdvPara))
+                if (stavka.poreskaOznaka.isNotBlank() || stavka.poreskaStopa.isNotBlank()) {
+                    append(" (").append(
+                        listOf(stavka.poreskaOznaka, stavka.poreskaStopa)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" ")
+                    ).append(')')
+                }
+                append('\n')
+            }
+        }
+        if (racun.tekst.isNotBlank() && racun.izvor != LogikaRacuna.IZVOR_RUCNO) {
+            append("\nZapis računa:\n").append(racun.tekst).append('\n')
+        }
+        if (racun.qrSadrzaj.isNotBlank() && racun.qrSadrzaj != racun.tekst) {
+            append("\nQR sadržaj:\n").append(racun.qrSadrzaj).append('\n')
+        }
+        if (racun.greska.isNotBlank()) append("\nPoslednja greška:\n").append(racun.greska)
+    }.trim()
 
     private fun prikaziNovac(para: Long): String = novac.format(para / 100.0)
 }

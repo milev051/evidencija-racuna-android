@@ -10,8 +10,11 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
+import java.util.Locale
 
 object Ui {
+    private val SRPSKI = Locale("sr", "RS")
+
     fun Context.dp(vrednost: Int) = (vrednost * resources.displayMetrics.density).toInt()
 
     fun dugme(context: Context, tekst: String, glavno: Boolean = false, klik: () -> Unit) =
@@ -75,5 +78,28 @@ object Ui {
         typeface = Typeface.MONOSPACE
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         setTextIsSelectable(true)
+    }
+
+    /** Naslov jednog odeljka u prikazu računa: VREME, LOKACIJA, STAVKE. */
+    fun odeljak(context: Context, naslov: String) = TextView(context).apply {
+        text = naslov.uppercase(SRPSKI)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        typeface = Typeface.DEFAULT_BOLD
+        letterSpacing = 0.08f
+        alpha = 0.6f
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = context.dp(16) }
+    }
+
+    /** Vrednost ispod naslova odeljka. */
+    fun vrednost(context: Context, tekst: String) = TextView(context).apply {
+        this.text = tekst
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = context.dp(2) }
     }
 }

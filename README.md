@@ -1,4 +1,4 @@
-# Računi — offline evidencija
+# Računi, offline evidencija
 
 Mala Android aplikacija za lokalnu evidenciju kupovina.
 
@@ -28,6 +28,14 @@ Najnoviji instalacioni APK nalazi se na stranici
 - Ručni unos je jedno slobodno tekstualno polje.
 - Svaki zapis dobija tačan trenutak unosa i prikazuje se od najnovijeg ka
   najstarijem.
+- Tokom uvoza iz galerije na ekranu stoji prozor sa tokom posla: koja je slika
+  na redu, traka napretka i broj do sada pronađenih računa. Traženje QR koda po
+  velikoj fotografiji traje, pa se vidi da aplikacija radi.
+- U spisku stoje samo najbitniji podaci: vreme, radnja, mesto, iznos i broj
+  stavki. Klik na račun otvara prikaz redom vreme, lokacija, stavke, ukupno.
+- Dugme „Prikaži detalje" otkriva ostalo: PIB, broj računa, poreze po
+  stavkama, QR sadržaj i poslednju grešku. Dugme „Otvori digitalni račun"
+  vodi na zvaničnu stranicu Poreske uprave.
 
 ## Izgradnja
 
