@@ -24,5 +24,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".SkenerAktivnost"
+            android:exported="false"
+            android:screenOrientation="fullSensor"
+            android:stateNotNeeded="true"
+            android:theme="@style/Theme.Racuni.Skener"
+            android:windowSoftInputMode="stateAlwaysHidden" />
     </application>
 </manifest>

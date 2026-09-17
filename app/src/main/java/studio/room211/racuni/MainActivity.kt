@@ -35,6 +35,7 @@ import java.util.concurrent.Executors
 class MainActivity : AppCompatActivity() {
     private lateinit var baza: Baza
     private lateinit var spisak: LinearLayout
+    private lateinit var ciscenje: LinearLayout
     private lateinit var stanje: TextView
     private val datum = SimpleDateFormat("dd.MM.yyyy. HH:mm", Locale("sr", "RS"))
     private val datumSaSekundama = SimpleDateFormat("dd.MM.yyyy. HH:mm:ss", Locale("sr", "RS"))
@@ -95,6 +96,9 @@ class MainActivity : AppCompatActivity() {
         stanje.setPadding(dp(4), dp(6), dp(4), dp(8))
         koren.addView(stanje)
 
+        ciscenje = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        koren.addView(ciscenje)
+
         spisak = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         koren.addView(spisak)
         setContentView(ScrollView(this).apply {
@@ -123,7 +127,8 @@ class MainActivity : AppCompatActivity() {
         skener.launch(
             ScanOptions().apply {
                 setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                setPrompt("Postavi QR kôd računa unutar okvira")
+                setCaptureActivity(SkenerAktivnost::class.java)
+                setPrompt("")
                 setBeepEnabled(true)
                 setOrientationLocked(false)
                 setBarcodeImageEnabled(false)
@@ -293,8 +298,45 @@ class MainActivity : AppCompatActivity() {
             else -> "Sačuvano: ${racuni.size} • čeka obradu: $ceka"
         }
 
+        ciscenje.removeAllViews()
+        val prazni = baza.brojBezPodataka()
+        if (prazni > 0) {
+            ciscenje.addView(dugme(this, "Obriši kodove bez podataka ($prazni)") {
+                potvrdi(
+                    "Obriši kodove bez podataka?",
+                    "Briše se $prazni sačuvanih kodova koji nisu fiskalni računi, " +
+                        "pa iz njih nikada ne mogu da se dobiju prodavnica, iznos i stavke.",
+                ) {
+                    val obrisano = baza.obrisiBezPodataka()
+                    osvezi()
+                    Toast.makeText(this, "Obrisano: $obrisano", Toast.LENGTH_SHORT).show()
+                }
+            })
+        }
+
         spisak.removeAllViews()
         for (racun in racuni) spisak.addView(redRacuna(racun))
+    }
+
+    /** Brisanje se uvek prvo potvrđuje, jer nema opoziva. */
+    private fun potvrdi(naslov: String, poruka: String, radnja: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle(naslov)
+            .setMessage(poruka)
+            .setPositiveButton("Obriši") { _, _ -> radnja() }
+            .setNegativeButton("Odustani", null)
+            .show()
+    }
+
+    private fun obrisiRacun(racun: Racun) {
+        potvrdi(
+            "Obriši ovaj zapis?",
+            "${nazivRacuna(racun)}\n${datum.format(Date(racun.datumRacuna ?: racun.nastao))}",
+        ) {
+            baza.obrisi(racun.id)
+            osvezi()
+            Toast.makeText(this, "Zapis je obrisan", Toast.LENGTH_SHORT).show()
+        }
     }
 
     /** U spisku stoje samo vreme, mesto i iznos; ostalo se otvara klikom. */
@@ -305,6 +347,9 @@ class MainActivity : AppCompatActivity() {
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
         })
         unutra.addView(vrednost(this, nazivRacuna(racun)))
+        if (LogikaRacuna.bezKorisnihPodataka(racun)) {
+            unutra.addView(maliTekst(this, "Kôd nije fiskalni račun; dugi pritisak briše zapis."))
+        }
         val mesto = kratkaLokacija(racun)
         if (mesto.isNotBlank()) unutra.addView(maliTekst(this, mesto))
 
@@ -336,6 +381,10 @@ class MainActivity : AppCompatActivity() {
         kartica.isClickable = true
         kartica.isFocusable = true
         kartica.setOnClickListener { prikaziRacun(racun) }
+        kartica.setOnLongClickListener {
+            obrisiRacun(racun)
+            true
+        }
         return kartica
     }
 
@@ -407,6 +456,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle(nazivRacuna(racun))
             .setView(ScrollView(this).apply { addView(stubac) })
             .setPositiveButton("Zatvori", null)
+            .setNegativeButton("Obriši") { _, _ -> obrisiRacun(racun) }
 
         if (LogikaRacuna.internetAdresa(racun.qrSadrzaj)) {
             dijalog.setNeutralButton("Otvori digitalni račun") { _, _ ->
@@ -416,8 +466,9 @@ class MainActivity : AppCompatActivity() {
         dijalog.show()
     }
 
-    private fun nazivRacuna(racun: Racun): String =
-        racun.preduzece.ifBlank { racun.prodajnoMesto }.ifBlank { racun.naziv }
+    private fun nazivRacuna(racun: Racun): String = racun.preduzece
+        .ifBlank { racun.prodajnoMesto }
+        .ifBlank { if (LogikaRacuna.bezKorisnihPodataka(racun)) "Kôd bez podataka" else racun.naziv }
 
     /** Jedan red za spisak: prodajno mesto i grad, bez ponavljanja naziva firme. */
     private fun kratkaLokacija(racun: Racun): String {
@@ -445,6 +496,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun kadaStizuStavke(racun: Racun): String = when {
         racun.izvor == LogikaRacuna.IZVOR_RUCNO -> "Ručni unos nema pojedinačne stavke."
+        LogikaRacuna.bezKorisnihPodataka(racun) ->
+            "Ovaj kôd nije fiskalni račun Poreske uprave, pa nema stavki. " +
+                "Takvi kodovi se najčešće nalaze na internim nalepnicama radnje."
         racun.stanje == LogikaRacuna.GRESKA -> "Obrada nije uspela; biće ponovljena."
         else -> "Stavke stižu kada aplikacija dobije internet i preuzme digitalni račun."
     }

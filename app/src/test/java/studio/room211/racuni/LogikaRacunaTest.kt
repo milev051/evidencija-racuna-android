@@ -17,6 +17,42 @@ class LogikaRacunaTest {
         assertEquals("Ručni unos", LogikaRacuna.rucniNaziv("  \n "))
     }
 
+    @Test fun prepoznajeKodBezPodatakaAliNeIRacunKojiCekaMrezu() {
+        val nefiskalni = prazanRacun(qrSadrzaj = "010982439WCRX5439WCRX50000083423")
+        val cekaMrezu = prazanRacun(qrSadrzaj = "https://suf.purs.gov.rs/v/?vl=abc")
+        val obradjen = prazanRacun(
+            qrSadrzaj = "010982439WCRX5439WCRX50000083423",
+            preduzece = "LIDL SRBIJA KD",
+        )
+
+        assertTrue(LogikaRacuna.bezKorisnihPodataka(nefiskalni))
+        assertFalse(LogikaRacuna.bezKorisnihPodataka(cekaMrezu))
+        assertFalse(LogikaRacuna.bezKorisnihPodataka(obradjen))
+        assertFalse(LogikaRacuna.bezKorisnihPodataka(nefiskalni.copy(izvor = LogikaRacuna.IZVOR_RUCNO)))
+        assertFalse(LogikaRacuna.bezKorisnihPodataka(nefiskalni.copy(ukupanIznosPara = 12000L)))
+    }
+
+    private fun prazanRacun(qrSadrzaj: String, preduzece: String = ""): Racun = Racun(
+        id = 1,
+        nastao = 0,
+        izvor = LogikaRacuna.IZVOR_QR,
+        naziv = "QR račun",
+        qrSadrzaj = qrSadrzaj,
+        tekst = qrSadrzaj,
+        stanje = LogikaRacuna.SACUVANO,
+        greska = "",
+        datumRacuna = null,
+        pib = "",
+        preduzece = preduzece,
+        prodajnoMesto = "",
+        adresa = "",
+        grad = "",
+        opstina = "",
+        ukupanIznosPara = null,
+        brojRacuna = "",
+        stavke = emptyList(),
+    )
+
     @Test fun sufZaglavljeSePretvaraUStrukturisanaPolja() {
         val html = """
             <html><body>

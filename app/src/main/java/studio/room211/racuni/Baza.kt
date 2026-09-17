@@ -147,6 +147,20 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
         arrayOf(LogikaRacuna.CEKA_MREZU, LogikaRacuna.GRESKA),
     )
 
+    fun obrisi(id: Long): Int =
+        // Stavke odlaze zajedno sa računom, preko ON DELETE CASCADE.
+        writableDatabase.delete("racun", "id = ?", arrayOf(id.toString()))
+
+    /** Koliko je sačuvanih kodova koji ne mogu da dobiju nijedan podatak. */
+    fun brojBezPodataka(): Int =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM racun WHERE $USLOV_BEZ_PODATAKA",
+            arrayOf(LogikaRacuna.IZVOR_QR),
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    fun obrisiBezPodataka(): Int =
+        writableDatabase.delete("racun", USLOV_BEZ_PODATAKA, arrayOf(LogikaRacuna.IZVOR_QR))
+
     fun sacuvajObradu(id: Long, tekst: String) {
         writableDatabase.update(
             "racun",
@@ -291,6 +305,13 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 3) {
     }.trim()
 
     companion object {
+        /** Isti uslov kao LogikaRacuna.bezKorisnihPodataka, samo u SQL-u. */
+        private const val USLOV_BEZ_PODATAKA =
+            "izvor = ? AND qr_sadrzaj <> '' AND qr_sadrzaj NOT LIKE 'http%' " +
+                "AND preduzece = '' AND prodajno_mesto = '' " +
+                "AND ukupan_iznos_para IS NULL " +
+                "AND id NOT IN (SELECT racun_id FROM stavka)"
+
         private const val POLJA_RACUNA =
             "SELECT id, nastao, izvor, naziv, qr_sadrzaj, tekst, stanje, greska, " +
                 "datum_racuna, pib, preduzece, prodajno_mesto, adresa, grad, opstina, " +

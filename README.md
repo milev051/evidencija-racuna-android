@@ -36,6 +36,14 @@ Najnoviji instalacioni APK nalazi se na stranici
 - Dugme „Prikaži detalje" otkriva ostalo: PIB, broj računa, poreze po
   stavkama, QR sadržaj i poslednju grešku. Dugme „Otvori digitalni račun"
   vodi na zvaničnu stranicu Poreske uprave.
+- Skener ima kvadratni okvir na sredini ekrana, bez crvene linije i bez
+  teksta. Okvir je tačno ona oblast koju kamera dekodira.
+- Zapis se briše dugim pritiskom na karticu ili dugmetom u prozoru računa,
+  uvek uz potvrdu.
+- Kodovi koji nisu fiskalni računi (interne nalepnice radnje) nemaju odakle
+  da dobiju prodavnicu, iznos i stavke. Oni se prepoznaju, označavaju kao
+  „Kôd bez podataka" i mogu da se obrišu odjednom, jednim dugmetom iznad
+  spiska. Starije verzije aplikacije su takve kodove čuvale kao račune.
 
 ## Izgradnja
 

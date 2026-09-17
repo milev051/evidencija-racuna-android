@@ -58,6 +58,19 @@ object LogikaRacuna {
             vrednost.startsWith("http://", ignoreCase = true)
     }
 
+    /**
+     * Kôd koji nikada neće dobiti podatke: nije internet adresa, pa nema
+     * odakle da se preuzmu prodavnica, iznos i stavke. Takvi kodovi su
+     * najčešće interne nalepnice radnje, a ne fiskalni račun.
+     */
+    fun bezKorisnihPodataka(racun: Racun): Boolean =
+        racun.izvor == IZVOR_QR &&
+            !internetAdresa(racun.qrSadrzaj) &&
+            racun.preduzece.isBlank() &&
+            racun.prodajnoMesto.isBlank() &&
+            racun.ukupanIznosPara == null &&
+            racun.stavke.isEmpty()
+
     fun rucniNaziv(tekst: String): String = tekst
         .lineSequence()
         .map { it.trim() }
