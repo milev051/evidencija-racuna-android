@@ -1,0 +1,15 @@
+# Android Studio i lokalna podešavanja
+.idea/
+*.iml
+local.properties
+
+# Gradle i rezultati izgradnje
+.gradle/
+**/build/
+
+# macOS
+.DS_Store
+
+# Lokalni ključevi za potpisivanje
+*.jks
+*.keystore

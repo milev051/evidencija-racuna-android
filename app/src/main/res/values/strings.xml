@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Računi</string>
+    <string name="manual_entry_title">Nemam račun</string>
+</resources>
