@@ -40,6 +40,13 @@ Najnoviji instalacioni APK nalazi se na stranici
   teksta. Okvir je tačno ona oblast koju kamera dekodira.
 - Zapis se briše dugim pritiskom na karticu ili dugmetom u prozoru računa,
   uvek uz potvrdu.
+- Uvoz iz galerije ne zaustavlja rad: tok stoji na vrhu ekrana i u traci
+  obaveštenja, pa spisak može da se pregleda dok skeniranje traje. Obaveštenje
+  radi i kada se izađe iz aplikacije.
+- „Pregled kupovina" računa sve iz već sačuvanih računa, bez ijednog novog
+  zahteva prema mreži: stavke sa vremenom kupovine, zbir po radnjama i zbir po
+  vrstama radnji (marketi, pekare, apoteke, benzinske stanice i slično).
+  Filteri za mesec, radnju i vrstu se slažu.
 - Kodovi koji nisu fiskalni računi (interne nalepnice radnje) nemaju odakle
   da dobiju prodavnicu, iznos i stavke. Oni se prepoznaju, označavaju kao
   „Kôd bez podataka" i mogu da se obrišu odjednom, jednim dugmetom iznad

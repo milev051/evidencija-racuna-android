@@ -32,6 +32,22 @@ class LogikaRacunaTest {
         assertFalse(LogikaRacuna.bezKorisnihPodataka(nefiskalni.copy(ukupanIznosPara = 12000L)))
     }
 
+    @Test fun kratakNazivRadnjeSklanjaPravniOblik() {
+        assertEquals("LIDL", LogikaRacuna.kratakNazivRadnje("LIDL SRBIJA KD"))
+        assertEquals("DELHAIZE", LogikaRacuna.kratakNazivRadnje("DELHAIZE SERBIA DOO"))
+        assertEquals("MERCATOR-S", LogikaRacuna.kratakNazivRadnje("MERCATOR-S DOO"))
+        assertEquals("DOO", LogikaRacuna.kratakNazivRadnje("DOO"))
+    }
+
+    @Test fun radnjeSeSvrstavajuPoCelojReci() {
+        assertEquals("Marketi", LogikaRacuna.vrstaRadnje("LIDL SRBIJA KD"))
+        assertEquals("Marketi", LogikaRacuna.vrstaRadnje("MAXI"))
+        assertEquals("Apoteke", LogikaRacuna.vrstaRadnje("APOTEKA JANKOVIĆ"))
+        assertEquals("Benzinske stanice", LogikaRacuna.vrstaRadnje("NIS AD NOVI SAD"))
+        assertEquals("Pekare i poslastičarnice", LogikaRacuna.vrstaRadnje("PEKARA TRPKOVIĆ"))
+        assertEquals(LogikaRacuna.VRSTA_OSTALO, LogikaRacuna.vrstaRadnje("PARADIS KNJIŽARA"))
+    }
+
     private fun prazanRacun(qrSadrzaj: String, preduzece: String = ""): Racun = Racun(
         id = 1,
         nastao = 0,

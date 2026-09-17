@@ -10,10 +10,15 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
+import java.text.NumberFormat
 import java.util.Locale
 
 object Ui {
     private val SRPSKI = Locale("sr", "RS")
+    private val NOVAC = NumberFormat.getCurrencyInstance(SRPSKI)
+
+    /** Iznosi se svuda čuvaju u parama, a prikazuju kao dinari. */
+    fun dinari(para: Long): String = NOVAC.format(para / 100.0)
 
     fun Context.dp(vrednost: Int) = (vrednost * resources.displayMetrics.density).toInt()
 

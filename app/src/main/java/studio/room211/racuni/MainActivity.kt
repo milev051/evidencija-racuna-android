@@ -1,7 +1,9 @@
 package studio.room211.racuni
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -18,6 +20,7 @@ import com.google.android.material.color.DynamicColors
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import studio.room211.racuni.Ui.dinari
 import studio.room211.racuni.Ui.dp
 import studio.room211.racuni.Ui.dugme
 import studio.room211.racuni.Ui.jednako
@@ -27,7 +30,6 @@ import studio.room211.racuni.Ui.odeljak
 import studio.room211.racuni.Ui.polje
 import studio.room211.racuni.Ui.vrednost
 import java.text.SimpleDateFormat
-import java.text.NumberFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -35,11 +37,11 @@ import java.util.concurrent.Executors
 class MainActivity : AppCompatActivity() {
     private lateinit var baza: Baza
     private lateinit var spisak: LinearLayout
+    private lateinit var tok: LinearLayout
     private lateinit var ciscenje: LinearLayout
     private lateinit var stanje: TextView
     private val datum = SimpleDateFormat("dd.MM.yyyy. HH:mm", Locale("sr", "RS"))
     private val datumSaSekundama = SimpleDateFormat("dd.MM.yyyy. HH:mm:ss", Locale("sr", "RS"))
-    private val novac = NumberFormat.getCurrencyInstance(Locale("sr", "RS"))
     private val izvrsilacUvoza = Executors.newSingleThreadExecutor()
 
     private val skener = registerForActivityResult(ScanContract()) { rezultat ->
@@ -64,6 +66,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val dozvolaZaObavestenja =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     private val izborIzGalerije =
         registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { slike ->
             if (slike.isNotEmpty()) uveziSlike(slike)
@@ -72,6 +77,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         DynamicColors.applyToActivityIfAvailable(this)
+        Obavestenja.pripremi(this)
         baza = Baza(this)
 
         val koren = LinearLayout(this).apply {
@@ -86,9 +92,16 @@ class MainActivity : AppCompatActivity() {
         koren.addView(maliTekst(this, "Skeniraj sada, obradi kada se pojavi internet.").apply {
             setPadding(dp(4), 0, dp(4), dp(12))
         })
+        tok = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        koren.addView(tok)
+
         koren.addView(dugme(this, "Skeniraj QR kôd", glavno = true) { pokreniSkener() })
         koren.addView(dugme(this, "Uvezi račun(e) iz galerije") {
+            zatraziObavestenja()
             izborIzGalerije.launch(arrayOf("image/*"))
+        })
+        koren.addView(dugme(this, "Pregled kupovina") {
+            startActivity(Intent(this, PregledAktivnost::class.java))
         })
         koren.addView(rucniUnos())
 
@@ -123,6 +136,13 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    /** Obaveštenje je jedini način da se tok vidi i van aplikacije. */
+    private fun zatraziObavestenja() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Obavestenja.dozvoljeno(this)) {
+            dozvolaZaObavestenja.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     private fun pokreniSkener() {
         skener.launch(
             ScanOptions().apply {
@@ -137,9 +157,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun uveziSlike(slike: List<Uri>) {
-        // Traženje QR koda po velikoj fotografiji traje i po nekoliko sekundi,
-        // pa se ceo tok vidi na ekranu umesto da aplikacija deluje zaglavljeno.
-        val napredak = NapredakUvoza(slike.size)
+        // Uvoz ne blokira ekran: tok stoji na vrhu aplikacije i u obaveštenju,
+        // pa spisak i dalje može da se pregleda dok skeniranje traje.
+        val napredak = TokUvoza(slike.size)
         val kontekst = applicationContext
         izvrsilacUvoza.execute {
             var novi = 0
@@ -151,7 +171,9 @@ class MainActivity : AppCompatActivity() {
             val citac = QrIzGalerije()
             try {
                 for ((redni, slika) in slike.withIndex()) {
-                    runOnUiThread { napredak.naSlici(redni, novi) }
+                    val nadjeno = novi
+                    runOnUiThread { napredak.naSlici(redni, nadjeno) }
+                    Obavestenja.napredak(kontekst, redni, slike.size, nadjeno)
                     try {
                         val kodovi = citac.procitaj(kontekst, slika)
                         if (kodovi.isEmpty()) {
@@ -170,8 +192,8 @@ class MainActivity : AppCompatActivity() {
                         neispravne++
                     }
                     val zavrseno = redni + 1
-                    val nadjeno = novi
-                    runOnUiThread { napredak.zavrsenaSlika(zavrseno, nadjeno) }
+                    val ukupnoNadjeno = novi
+                    runOnUiThread { napredak.zavrsenaSlika(zavrseno, ukupnoNadjeno) }
                 }
             } finally {
                 citac.close()
@@ -179,35 +201,29 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (trebaMreza) ObradaRacuna.zakazi(kontekst)
-            runOnUiThread {
-                napredak.zatvori()
-                if (isDestroyed) return@runOnUiThread
-                osvezi()
-                val poruka = buildString {
-                    append("Uvezeno: ").append(novi)
-                    if (duplikati > 0) append("\nVeć sačuvano: ").append(duplikati)
-                    if (bezQr > 0) {
-                        append("\nBez fiskalnog QR koda, preskočeno: ").append(bezQr)
-                    }
-                    if (neispravne > 0) append("\nNečitljive slike, preskočeno: ").append(neispravne)
-                    if (novi == 0 && bezQr > 0) {
-                        append("\n\nAko je QR vidljiv, iseci fotografiju oko njega i uvezi isečenu sliku.")
-                    }
+            val poruka = buildString {
+                append("Uvezeno: ").append(novi)
+                if (duplikati > 0) append(" • već sačuvano: ").append(duplikati)
+                if (bezQr > 0) append(" • bez fiskalnog QR koda: ").append(bezQr)
+                if (neispravne > 0) append(" • nečitljivo: ").append(neispravne)
+                if (novi == 0 && bezQr > 0) {
+                    append("\nAko je QR vidljiv, iseci fotografiju oko njega i uvezi isečenu sliku.")
                 }
-                AlertDialog.Builder(this)
-                    .setTitle("Uvoz iz galerije")
-                    .setMessage(poruka)
-                    .setPositiveButton("U redu", null)
-                    .show()
+            }
+            Obavestenja.kraj(kontekst, poruka)
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                napredak.zavrsi(poruka)
+                osvezi()
             }
         }
     }
 
-    /** Prozor koji tokom grupnog uvoza pokazuje koja je slika na redu. */
-    private inner class NapredakUvoza(private val ukupno: Int) {
+    /** Tok uvoza na vrhu ekrana, umesto prozora koji zaustavlja rad. */
+    private inner class TokUvoza(private val ukupno: Int) {
         private val korak = TextView(this@MainActivity).apply {
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
-            text = pocetniTekst()
+            text = tekstKoraka(0)
         }
         private val traka = LinearProgressIndicator(this@MainActivity).apply {
             // Kod jedne slike nema šta da se puni, pa traka samo pokazuje da rad traje.
@@ -217,43 +233,49 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(14) }
+            ).apply { topMargin = dp(12) }
         }
         private val nalaz = maliTekst(this@MainActivity, "Pronađenih računa: 0").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(12) }
+            ).apply { topMargin = dp(10) }
         }
-        private val dijalog = AlertDialog.Builder(this@MainActivity)
-            .setTitle("Tražim QR kodove")
-            .setView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(24), dp(18), dp(24), dp(4))
-                addView(korak)
-                addView(traka)
-                addView(nalaz)
-            })
-            .setCancelable(false)
-            .create()
-            .also { it.show() }
+        private val unutra: LinearLayout
 
-        private fun pocetniTekst() =
-            if (ukupno == 1) "Skeniram sliku…" else "Skeniram sliku 1 od $ukupno…"
+        init {
+            val (kartica, sadrzaj) = kartica(this@MainActivity)
+            sadrzaj.addView(korak)
+            sadrzaj.addView(traka)
+            sadrzaj.addView(nalaz)
+            unutra = sadrzaj
+            tok.removeAllViews()
+            tok.addView(kartica)
+        }
+
+        private fun tekstKoraka(redni: Int) =
+            if (ukupno == 1) "Skeniram sliku…" else "Skeniram sliku ${redni + 1} od $ukupno…"
 
         fun naSlici(redni: Int, pronadjeno: Int) {
-            korak.text =
-                if (ukupno == 1) "Skeniram sliku…" else "Skeniram sliku ${redni + 1} od $ukupno…"
+            if (isDestroyed) return
+            korak.text = tekstKoraka(redni)
             nalaz.text = "Pronađenih računa: $pronadjeno"
         }
 
         fun zavrsenaSlika(zavrseno: Int, pronadjeno: Int) {
+            if (isDestroyed) return
             if (!traka.isIndeterminate) traka.setProgressCompat(zavrseno, true)
             nalaz.text = "Pronađenih računa: $pronadjeno"
         }
 
-        fun zatvori() {
-            if (dijalog.isShowing && !isFinishing && !isDestroyed) dijalog.dismiss()
+        fun zavrsi(poruka: String) {
+            korak.text = "Uvoz iz galerije je gotov"
+            traka.visibility = View.GONE
+            nalaz.text = poruka
+            unutra.addView(dugme(this@MainActivity, "U redu") {
+                tok.removeAllViews()
+                Obavestenja.ukloni(this@MainActivity)
+            })
         }
     }
 
@@ -354,7 +376,7 @@ class MainActivity : AppCompatActivity() {
         if (mesto.isNotBlank()) unutra.addView(maliTekst(this, mesto))
 
         val dodatno = buildString {
-            if (racun.ukupanIznosPara != null) append(prikaziNovac(racun.ukupanIznosPara))
+            if (racun.ukupanIznosPara != null) append(dinari(racun.ukupanIznosPara))
             if (racun.stavke.isNotEmpty()) {
                 if (isNotEmpty()) append(" • ")
                 append("stavki: ").append(racun.stavke.size)
@@ -415,8 +437,8 @@ class MainActivity : AppCompatActivity() {
                 stubac.addView(vrednost(this, "• ${stavka.naziv}"))
                 stubac.addView(maliTekst(
                     this,
-                    "${stavka.kolicina} × ${prikaziNovac(stavka.jedinicnaCenaPara)}" +
-                        " = ${prikaziNovac(stavka.ukupnoPara)}",
+                    "${stavka.kolicina} × ${dinari(stavka.jedinicnaCenaPara)}" +
+                        " = ${dinari(stavka.ukupnoPara)}",
                 ).apply { setPadding(dp(14), 0, 0, dp(6)) })
             }
         } else if (racun.tekst.isNotBlank() && racun.izvor == LogikaRacuna.IZVOR_RUCNO) {
@@ -430,7 +452,7 @@ class MainActivity : AppCompatActivity() {
         if (racun.ukupanIznosPara != null) {
             stubac.addView(odeljak(this, "Ukupno"))
             stubac.addView(TextView(this).apply {
-                text = prikaziNovac(racun.ukupanIznosPara)
+                text = dinari(racun.ukupanIznosPara)
                 setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
             })
         }
@@ -523,8 +545,8 @@ class MainActivity : AppCompatActivity() {
             append("\nPorezi po stavkama:\n")
             for (stavka in racun.stavke) {
                 append("• ").append(stavka.naziv).append('\n')
-                append("  osnovica ").append(prikaziNovac(stavka.poreskaOsnovicaPara))
-                    .append(", PDV ").append(prikaziNovac(stavka.pdvPara))
+                append("  osnovica ").append(dinari(stavka.poreskaOsnovicaPara))
+                    .append(", PDV ").append(dinari(stavka.pdvPara))
                 if (stavka.poreskaOznaka.isNotBlank() || stavka.poreskaStopa.isNotBlank()) {
                     append(" (").append(
                         listOf(stavka.poreskaOznaka, stavka.poreskaStopa)
@@ -544,5 +566,4 @@ class MainActivity : AppCompatActivity() {
         if (racun.greska.isNotBlank()) append("\nPoslednja greška:\n").append(racun.greska)
     }.trim()
 
-    private fun prikaziNovac(para: Long): String = novac.format(para / 100.0)
 }
