@@ -2,6 +2,20 @@
 
 Mala Android aplikacija za lokalnu evidenciju kupovina.
 
+## Tri taba
+
+Sve stoji u tri taba na dnu ekrana, da ono što se koristi svakog dana ne bude
+zatrpano onim što se koristi jednom.
+
+- **Skeniranje**: veliko dugme za QR kôd, prekidač „Kamera se otvara odmah po
+  pokretanju" i unos kupovine bez računa. Kada je prekidač uključen,
+  aplikacija se otvara na kameri, a dugme „Nazad u aplikaciju" vraća na ekran.
+- **Slike računa**: uvoz iz galerije, унос ПФР броја, spisak zapisa nastalih iz
+  fotografija i podešavanja sa bekapom. Ovaj tab je privremen, za fotografije
+  snimljene pre aplikacije; kada se stare slike obrade, više nije potreban.
+- **Pregled**: računi i zbirovi. Podprikazi su Računi, Stavke, Radnje,
+  Kategorije, Zdravlje i Vrste radnji, uz filtere za mesec i redosled.
+
 ## Preuzimanje
 
 Najnoviji instalacioni APK nalazi se na stranici

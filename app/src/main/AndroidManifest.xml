@@ -33,12 +33,6 @@
             android:parentActivityName=".MainActivity" />
 
         <activity
-            android:name=".PregledAktivnost"
-            android:exported="false"
-            android:label="Pregled kupovina"
-            android:parentActivityName=".MainActivity" />
-
-        <activity
             android:name=".SkenerAktivnost"
             android:exported="false"
             android:screenOrientation="fullSensor"

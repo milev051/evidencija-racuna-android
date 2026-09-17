@@ -5,8 +5,10 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.Menu
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -16,7 +18,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.setPadding
 import androidx.work.WorkManager
+import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.color.DynamicColors
+import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -35,11 +39,21 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
+    private enum class Tab { SKENIRANJE, SLIKE, PREGLED }
+
     private lateinit var baza: Baza
-    private lateinit var spisak: LinearLayout
     private lateinit var tok: LinearLayout
-    private lateinit var ciscenje: LinearLayout
-    private lateinit var stanje: TextView
+    private lateinit var sadrzajTaba: FrameLayout
+    private lateinit var donjaTraka: BottomNavigationView
+
+    // Delovi trenutnog taba koji se sami osvežavaju; ostalo se ne dira, da
+    // uneseni tekst ne nestane pri svakom osvežavanju.
+    private var stanje: TextView? = null
+    private var ciscenje: LinearLayout? = null
+    private var spisakSlika: LinearLayout? = null
+    private var pregled: PregledPrikaz? = null
+    private var tab = Tab.SKENIRANJE
+    private var kameraPokrenuta = false
     private val datum = SimpleDateFormat("dd.MM.yyyy. HH:mm", Locale("sr", "RS"))
     private val datumSaSekundama = SimpleDateFormat("dd.MM.yyyy. HH:mm:ss", Locale("sr", "RS"))
     private val imeFajla = SimpleDateFormat("yyyy-MM-dd", Locale("sr", "RS"))
@@ -96,57 +110,171 @@ class MainActivity : AppCompatActivity() {
         DynamicColors.applyToActivityIfAvailable(this)
         Obavestenja.pripremi(this)
         baza = Baza(this)
+        kameraPokrenuta = savedInstanceState?.getBoolean(KAMERA_POKRENUTA) ?: false
 
-        val koren = LinearLayout(this).apply {
+        val koren = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        // Tok uvoza stoji iznad tabova, pa se vidi sa svakog ekrana.
+        tok = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14))
+            setPadding(dp(14), dp(10), dp(14), 0)
         }
-        koren.addView(TextView(this).apply {
-            setText(R.string.app_name)
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_HeadlineMedium)
-            setPadding(dp(4), dp(4), dp(4), 0)
-        })
-        koren.addView(maliTekst(this, "Skeniraj sada, obradi kada se pojavi internet.").apply {
-            setPadding(dp(4), 0, dp(4), dp(12))
-        })
-        tok = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         koren.addView(tok)
 
-        koren.addView(dugme(this, "Skeniraj QR kôd", glavno = true) { pokreniSkener() })
-        koren.addView(dugme(this, "Uvezi račun(e) iz galerije") {
-            zatraziObavestenja()
-            izborIzGalerije.launch(arrayOf("image/*"))
-        })
-        koren.addView(dugme(this, "Unesi ПФР број sa računa") { unosPfrBroja() })
-        koren.addView(dugme(this, "Pregled kupovina") {
-            startActivity(Intent(this, PregledAktivnost::class.java))
-        })
-        koren.addView(dugme(this, "Podešavanja i bekap") { podesavanja() })
-        koren.addView(rucniUnos())
+        sadrzajTaba = FrameLayout(this)
+        koren.addView(
+            sadrzajTaba,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
+        )
 
-        stanje = maliTekst(this, "")
-        stanje.setPadding(dp(4), dp(6), dp(4), dp(8))
-        koren.addView(stanje)
+        donjaTraka = BottomNavigationView(this).apply {
+            menu.add(Menu.NONE, Tab.SKENIRANJE.ordinal + 1, 0, "Skeniranje")
+                .setIcon(R.drawable.ic_tab_skener)
+            menu.add(Menu.NONE, Tab.SLIKE.ordinal + 1, 1, "Slike računa")
+                .setIcon(R.drawable.ic_tab_slike)
+            menu.add(Menu.NONE, Tab.PREGLED.ordinal + 1, 2, "Pregled")
+                .setIcon(R.drawable.ic_tab_pregled)
+            setOnItemSelectedListener { stavka ->
+                otvoriTab(Tab.values()[stavka.itemId - 1])
+                true
+            }
+        }
+        koren.addView(
+            donjaTraka,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        setContentView(koren)
 
-        ciscenje = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        koren.addView(ciscenje)
-
-        spisak = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        koren.addView(spisak)
-        setContentView(ScrollView(this).apply {
-            addView(koren, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        })
+        otvoriTab(tab)
+        donjaTraka.selectedItemId = tab.ordinal + 1
 
         WorkManager.getInstance(this)
             .getWorkInfosForUniqueWorkLiveData(ObradaRacuna.IME_POSLA)
             .observe(this) { osvezi() }
         ObradaRacuna.zakazi(this)
+
+        // Kamera prva, ako je tako podešeno; povratak je dugme u skeneru.
+        if (!kameraPokrenuta && Podesavanja.kameraOdmah(this)) {
+            kameraPokrenuta = true
+            pokreniSkener()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KAMERA_POKRENUTA, kameraPokrenuta)
+    }
+
+    private fun otvoriTab(izabran: Tab) {
+        tab = izabran
+        stanje = null
+        ciscenje = null
+        spisakSlika = null
+        pregled = null
+        sadrzajTaba.removeAllViews()
+        val prikaz = when (izabran) {
+            Tab.SKENIRANJE -> tabSkeniranje()
+            Tab.SLIKE -> tabSlike()
+            Tab.PREGLED -> tabPregled()
+        }
+        sadrzajTaba.addView(
+            prikaz,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
         osvezi()
+    }
+
+    private fun stubac(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(14), dp(6), dp(14), dp(14))
+    }
+
+    private fun uListu(sadrzaj: LinearLayout): View = ScrollView(this).apply {
+        addView(sadrzaj, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+
+    private fun naslov(tekst: String, podnaslov: String): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = tekst
+                setTextAppearance(
+                    com.google.android.material.R.style.TextAppearance_Material3_HeadlineSmall
+                )
+                setPadding(dp(4), 0, dp(4), 0)
+            })
+            addView(maliTekst(this@MainActivity, podnaslov).apply {
+                setPadding(dp(4), 0, dp(4), dp(12))
+            })
+        }
+
+    /** Prvi tab: skeniranje i unos bez računa. */
+    private fun tabSkeniranje(): View {
+        val sadrzaj = stubac()
+        sadrzaj.addView(naslov("Računi", "Skeniraj sada, obradi kada se pojavi internet."))
+        sadrzaj.addView(dugme(this, "Skeniraj QR kôd", glavno = true) { pokreniSkener() })
+
+        val prekidac = MaterialSwitch(this).apply {
+            text = "Kamera se otvara odmah po pokretanju"
+            isChecked = Podesavanja.kameraOdmah(this@MainActivity)
+            setPadding(dp(4), dp(14), dp(4), dp(6))
+            setOnCheckedChangeListener { _, ukljuceno ->
+                Podesavanja.sacuvajKameraOdmah(this@MainActivity, ukljuceno)
+            }
+        }
+        sadrzaj.addView(prekidac)
+        sadrzaj.addView(maliTekst(
+            this,
+            "Kada je uključeno, aplikacija se otvara na kameri, a dugme „Nazad u " +
+                "aplikaciju\" vraća na ovaj ekran.",
+        ))
+
+        sadrzaj.addView(rucniUnos())
+
+        val stanjeTekst = maliTekst(this, "").apply { setPadding(dp(4), dp(14), dp(4), dp(4)) }
+        stanje = stanjeTekst
+        sadrzaj.addView(stanjeTekst)
+        return uListu(sadrzaj)
+    }
+
+    /** Drugi tab: sve oko starih fotografija računa, na jednom mestu. */
+    private fun tabSlike(): View {
+        val sadrzaj = stubac()
+        sadrzaj.addView(naslov(
+            "Slike računa",
+            "Za fotografije snimljene pre aplikacije. Kada se stare slike obrade, " +
+                "ovaj tab više nije potreban.",
+        ))
+        sadrzaj.addView(dugme(this, "Uvezi račun(e) iz galerije", glavno = true) {
+            zatraziObavestenja()
+            izborIzGalerije.launch(arrayOf("image/*"))
+        })
+        sadrzaj.addView(dugme(this, "Unesi ПФР број sa računa") { unosPfrBroja() })
+        sadrzaj.addView(dugme(this, "Podešavanja i bekap") { podesavanja() })
+
+        val ocistiSe = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        ciscenje = ocistiSe
+        sadrzaj.addView(ocistiSe)
+
+        sadrzaj.addView(odeljak(this, "Sa fotografija"))
+        val slike = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        spisakSlika = slike
+        sadrzaj.addView(slike)
+        return uListu(sadrzaj)
+    }
+
+    /** Treći tab: svi prikazi onoga što je kupljeno. */
+    private fun tabPregled(): View {
+        val prikaz = PregledPrikaz(this, baza) { racun -> redRacuna(racun) }
+        pregled = prikaz
+        return prikaz.koren
     }
 
     override fun onResume() {
         super.onResume()
-        if (::spisak.isInitialized) osvezi()
+        osvezi()
     }
 
     override fun onDestroy() {
@@ -605,6 +733,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private companion object {
+        const val KAMERA_POKRENUTA = "kamera_pokrenuta"
+    }
+
     private fun porukaOGresci(naslov: String, greska: Throwable) {
         AlertDialog.Builder(this)
             .setTitle(naslov)
@@ -669,32 +801,53 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun osvezi() {
+        if (!::baza.isInitialized) return
         val racuni = baza.svi()
-        val ceka = racuni.count { it.stanje != LogikaRacuna.SACUVANO }
-        stanje.text = when {
+        val ceka = racuni.count {
+            it.stanje == LogikaRacuna.CEKA_MREZU || it.stanje == LogikaRacuna.GRESKA
+        }
+        stanje?.text = when {
             racuni.isEmpty() -> "Još nema sačuvanih računa."
             ceka == 0 -> "Sačuvano: ${racuni.size} • sve obrađeno"
             else -> "Sačuvano: ${racuni.size} • čeka obradu: $ceka"
         }
 
-        ciscenje.removeAllViews()
-        val prazni = baza.brojBezPodataka()
-        if (prazni > 0) {
-            ciscenje.addView(dugme(this, "Obriši kodove bez podataka ($prazni)") {
-                potvrdi(
-                    "Obriši kodove bez podataka?",
-                    "Briše se $prazni sačuvanih kodova koji nisu fiskalni računi, " +
-                        "pa iz njih nikada ne mogu da se dobiju prodavnica, iznos i stavke.",
-                ) {
-                    val obrisano = baza.obrisiBezPodataka()
-                    osvezi()
-                    Toast.makeText(this, "Obrisano: $obrisano", Toast.LENGTH_SHORT).show()
-                }
-            })
+        ciscenje?.let { mesto ->
+            mesto.removeAllViews()
+            val prazni = baza.brojBezPodataka()
+            if (prazni > 0) {
+                mesto.addView(dugme(this, "Obriši kodove bez podataka ($prazni)") {
+                    potvrdi(
+                        "Obriši kodove bez podataka?",
+                        "Briše se $prazni sačuvanih kodova koji nisu fiskalni računi, " +
+                            "pa iz njih nikada ne mogu da se dobiju prodavnica, iznos i stavke.",
+                    ) {
+                        val obrisano = baza.obrisiBezPodataka()
+                        osvezi()
+                        Toast.makeText(this, "Obrisano: $obrisano", Toast.LENGTH_SHORT).show()
+                    }
+                })
+            }
         }
 
-        spisak.removeAllViews()
-        for (racun in racuni) spisak.addView(redRacuna(racun))
+        spisakSlika?.let { mesto ->
+            mesto.removeAllViews()
+            val saSlika = racuni.filter {
+                it.izvor == LogikaRacuna.IZVOR_SLIKA || it.izvornaSlika.isNotBlank()
+            }
+            if (saSlika.isEmpty()) {
+                mesto.addView(maliTekst(
+                    this,
+                    "Ovde stoje zapisi nastali iz fotografija, dok se ne provere zvanično.",
+                ))
+            } else {
+                val cekaju = saSlika.count { it.stanje != LogikaRacuna.SACUVANO }
+                mesto.addView(maliTekst(this, "Zapisa: ${saSlika.size} • čeka proveru: $cekaju"))
+                for (racun in saSlika) mesto.addView(redRacuna(racun))
+            }
+        }
+
+        pregled?.osvezi()
     }
 
     /** Brisanje se uvek prvo potvrđuje, jer nema opoziva. */

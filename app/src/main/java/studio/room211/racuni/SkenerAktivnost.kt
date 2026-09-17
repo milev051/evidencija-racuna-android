@@ -6,6 +6,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
+import studio.room211.racuni.Ui.dp
+import com.google.android.material.button.MaterialButton
 import com.journeyapps.barcodescanner.CaptureManager
 import com.journeyapps.barcodescanner.DecoratedBarcodeView
 import com.journeyapps.barcodescanner.Size
@@ -43,6 +45,26 @@ class SkenerAktivnost : AppCompatActivity() {
             OkvirSkenera(this, strana),
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        // Kamera ume da se otvori prva, pa mora da postoji vidljiv izlaz nazad.
+        koren.addView(
+            MaterialButton(
+                this,
+                null,
+                com.google.android.material.R.attr.materialButtonOutlinedStyle,
+            ).apply {
+                text = "Nazad u aplikaciju"
+                setTextColor(Color.WHITE)
+                strokeColor = android.content.res.ColorStateList.valueOf(Color.WHITE)
+                setOnClickListener { finish() }
+            },
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
+                bottomMargin = dp(28)
+            },
         )
         setContentView(koren)
 

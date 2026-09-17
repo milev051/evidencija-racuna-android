@@ -12,6 +12,7 @@ object Podesavanja {
     private const val KLJUC_MODELA = "gemini_model"
     private const val KLJUC_PRISTUPA = "gemini_kljuc"
     private const val KLJUC_GRESKE = "kategorije_greska"
+    private const val KLJUC_KAMERE = "kamera_odmah"
 
     const val PODRAZUMEVANI_MODEL = "gemini-2.5-flash"
 
@@ -30,6 +31,13 @@ object Podesavanja {
             .putString(KLJUC_PRISTUPA, kljuc.trim())
             .putString(KLJUC_MODELA, model.trim())
             .apply()
+    }
+
+    fun kameraOdmah(context: Context): Boolean =
+        prostor(context).getBoolean(KLJUC_KAMERE, false)
+
+    fun sacuvajKameraOdmah(context: Context, ukljuceno: Boolean) {
+        prostor(context).edit().putBoolean(KLJUC_KAMERE, ukljuceno).apply()
     }
 
     fun greskaKategorija(context: Context): String =
