@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
 /** Jedina trajna istina aplikacije. Sve se upisuje pre pokušaja mrežne obrade. */
-class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
+class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 5) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
@@ -33,7 +33,9 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
                 grad TEXT NOT NULL DEFAULT '',
                 opstina TEXT NOT NULL DEFAULT '',
                 ukupan_iznos_para INTEGER,
-                broj_racuna TEXT NOT NULL DEFAULT ''
+                broj_racuna TEXT NOT NULL DEFAULT '',
+                brojac TEXT NOT NULL DEFAULT '',
+                izvorna_slika TEXT NOT NULL DEFAULT ''
             )
             """.trimIndent()
         )
@@ -83,6 +85,10 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
                 "UPDATE racun SET stanje = '${LogikaRacuna.CEKA_MREZU}', greska = '' " +
                     "WHERE qr_sadrzaj LIKE 'https://suf.purs.gov.rs/v/%'"
             )
+        }
+        if (oldVersion < 5) {
+            dodajKolonu(db, "racun", "brojac")
+            dodajKolonu(db, "racun", "izvorna_slika")
         }
         if (oldVersion < 4) {
             // Baza sa verzije 3 već ima tabelu stavki, ali bez kolona za kategoriju.
@@ -151,6 +157,126 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
             },
             SQLiteDatabase.CONFLICT_IGNORE,
         )
+    }
+
+    /**
+     * Račun pročitan sa fotografije. Ostaje u stanju „čeka proveru" dok se
+     * podaci ne potvrde na zvaničnoj stranici, pa se odmah vidi šta je
+     * pouzdano, a šta je samo pročitano sa slike.
+     */
+    fun dodajSaSlike(
+        naziv: String,
+        tekst: String,
+        brojRacuna: String,
+        brojac: String,
+        ukupanIznosPara: Long?,
+        datumRacuna: Long?,
+        izvornaSlika: String,
+        stanje: String,
+        stavke: List<Stavka>,
+        vreme: Long = System.currentTimeMillis(),
+    ): Long {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            if (brojRacuna.isNotBlank() && postojiBrojRacuna(db, brojRacuna)) return -1L
+            if (izvornaSlika.isNotBlank() && postojiSlika(db, izvornaSlika)) return -1L
+            val id = db.insertOrThrow(
+                "racun",
+                null,
+                ContentValues().apply {
+                    put("nastao", vreme)
+                    put("izvor", LogikaRacuna.IZVOR_SLIKA)
+                    put("naziv", naziv.ifBlank { "Račun sa slike" })
+                    put("qr_sadrzaj", "")
+                    put("tekst", tekst)
+                    put("stanje", stanje)
+                    put("greska", "")
+                    if (datumRacuna == null) putNull("datum_racuna") else put("datum_racuna", datumRacuna)
+                    if (ukupanIznosPara == null) putNull("ukupan_iznos_para")
+                    else put("ukupan_iznos_para", ukupanIznosPara)
+                    put("broj_racuna", brojRacuna)
+                    put("brojac", brojac)
+                    put("izvorna_slika", izvornaSlika)
+                },
+            )
+            for (stavka in stavke) upisiStavku(db, id, stavka)
+            db.setTransactionSuccessful()
+            return id
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Kategorija se uzima iz keša, osim kada stavka već nosi svoju iz bekapa. */
+    private fun upisiStavku(
+        db: SQLiteDatabase,
+        racunId: Long,
+        stavka: Stavka,
+        koristiKes: Boolean = true,
+    ) {
+        val zapamceno = if (koristiKes) izKesa(db, LogikaRacuna.kljucProizvoda(stavka.naziv)) else null
+        db.insertOrThrow(
+            "stavka",
+            null,
+            ContentValues().apply {
+                put("racun_id", racunId)
+                put("naziv", stavka.naziv)
+                put("kolicina", stavka.kolicina)
+                put("jedinicna_cena_para", stavka.jedinicnaCenaPara)
+                put("ukupno_para", stavka.ukupnoPara)
+                put("poreska_osnovica_para", stavka.poreskaOsnovicaPara)
+                put("pdv_para", stavka.pdvPara)
+                put("poreska_oznaka", stavka.poreskaOznaka)
+                put("poreska_stopa", stavka.poreskaStopa)
+                put("kategorija", zapamceno?.kategorija ?: stavka.kategorija)
+                put("zdravlje", zapamceno?.zdravlje ?: stavka.zdravlje)
+            },
+        )
+    }
+
+    private fun postojiBrojRacuna(db: SQLiteDatabase, broj: String): Boolean = db.rawQuery(
+        "SELECT 1 FROM racun WHERE broj_racuna = ? LIMIT 1",
+        arrayOf(broj),
+    ).use { it.moveToFirst() }
+
+    private fun postojiSlika(db: SQLiteDatabase, ime: String): Boolean = db.rawQuery(
+        "SELECT 1 FROM racun WHERE izvorna_slika = ? LIMIT 1",
+        arrayOf(ime),
+    ).use { it.moveToFirst() }
+
+    /** Ručni unos koji je model razložio na stavke. */
+    fun dodajRucnoSaStavkama(
+        naziv: String,
+        tekst: String,
+        ukupanIznosPara: Long?,
+        datumRacuna: Long?,
+        stavke: List<Stavka>,
+        vreme: Long = System.currentTimeMillis(),
+    ): Long {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val id = db.insertOrThrow(
+                "racun",
+                null,
+                ContentValues().apply {
+                    put("nastao", vreme)
+                    put("izvor", LogikaRacuna.IZVOR_RUCNO)
+                    put("naziv", naziv.ifBlank { LogikaRacuna.rucniNaziv(tekst) })
+                    put("tekst", tekst.trim())
+                    put("stanje", LogikaRacuna.SACUVANO)
+                    if (datumRacuna == null) putNull("datum_racuna") else put("datum_racuna", datumRacuna)
+                    if (ukupanIznosPara == null) putNull("ukupan_iznos_para")
+                    else put("ukupan_iznos_para", ukupanIznosPara)
+                },
+            )
+            for (stavka in stavke) upisiStavku(db, id, stavka)
+            db.setTransactionSuccessful()
+            return id
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun dodajRucno(tekst: String, vreme: Long = System.currentTimeMillis()): Long =
@@ -232,26 +358,7 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
                 arrayOf(id.toString()),
             )
             db.delete("stavka", "racun_id = ?", arrayOf(id.toString()))
-            for (stavka in analiza.stavke) {
-                db.insertOrThrow(
-                    "stavka",
-                    null,
-                    ContentValues().apply {
-                        put("racun_id", id)
-                        put("naziv", stavka.naziv)
-                        put("kolicina", stavka.kolicina)
-                        put("jedinicna_cena_para", stavka.jedinicnaCenaPara)
-                        put("ukupno_para", stavka.ukupnoPara)
-                        put("poreska_osnovica_para", stavka.poreskaOsnovicaPara)
-                        put("pdv_para", stavka.pdvPara)
-                        put("poreska_oznaka", stavka.poreskaOznaka)
-                        put("poreska_stopa", stavka.poreskaStopa)
-                        val zapamceno = izKesa(db, LogikaRacuna.kljucProizvoda(stavka.naziv))
-                        put("kategorija", zapamceno?.kategorija.orEmpty())
-                        put("zdravlje", zapamceno?.zdravlje.orEmpty())
-                    },
-                )
-            }
+            for (stavka in analiza.stavke) upisiStavku(db, id, stavka)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -333,27 +440,11 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
                         if (racun.ukupanIznosPara == null) putNull("ukupan_iznos_para")
                         else put("ukupan_iznos_para", racun.ukupanIznosPara)
                         put("broj_racuna", racun.brojRacuna)
+                        put("brojac", racun.brojac)
+                        put("izvorna_slika", racun.izvornaSlika)
                     },
                 )
-                for (stavka in racun.stavke) {
-                    db.insertOrThrow(
-                        "stavka",
-                        null,
-                        ContentValues().apply {
-                            put("racun_id", id)
-                            put("naziv", stavka.naziv)
-                            put("kolicina", stavka.kolicina)
-                            put("jedinicna_cena_para", stavka.jedinicnaCenaPara)
-                            put("ukupno_para", stavka.ukupnoPara)
-                            put("poreska_osnovica_para", stavka.poreskaOsnovicaPara)
-                            put("pdv_para", stavka.pdvPara)
-                            put("poreska_oznaka", stavka.poreskaOznaka)
-                            put("poreska_stopa", stavka.poreskaStopa)
-                            put("kategorija", stavka.kategorija)
-                            put("zdravlje", stavka.zdravlje)
-                        },
-                    )
-                }
+                for (stavka in racun.stavke) upisiStavku(db, id, stavka, koristiKes = false)
                 dodato++
             }
             db.setTransactionSuccessful()
@@ -387,6 +478,20 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
         readableDatabase.rawQuery(sql, null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
     data class Pojam(val kategorija: String, val zdravlje: String)
+
+    /** Posle uspešne provere zapis dobija zvanični link i ide na redovnu obradu. */
+    fun postaviQr(id: Long, adresa: String) {
+        writableDatabase.update(
+            "racun",
+            ContentValues().apply {
+                put("qr_sadrzaj", adresa.trim())
+                put("stanje", LogikaRacuna.CEKA_MREZU)
+                put("greska", "")
+            },
+            "id = ?",
+            arrayOf(id.toString()),
+        )
+    }
 
     fun sacuvajGresku(id: Long, poruka: String) {
         writableDatabase.update(
@@ -423,6 +528,8 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
                         opstina = c.getString(14),
                         ukupanIznosPara = if (c.isNull(15)) null else c.getLong(15),
                         brojRacuna = c.getString(16),
+                        brojac = c.getString(17),
+                        izvornaSlika = c.getString(18),
                         stavke = citajStavke(c.getLong(0)),
                     )
                 )
@@ -481,6 +588,6 @@ class Baza(context: Context) : SQLiteOpenHelper(context, "racuni.db", null, 4) {
         private const val POLJA_RACUNA =
             "SELECT id, nastao, izvor, naziv, qr_sadrzaj, tekst, stanje, greska, " +
                 "datum_racuna, pib, preduzece, prodajno_mesto, adresa, grad, opstina, " +
-                "ukupan_iznos_para, broj_racuna "
+                "ukupan_iznos_para, broj_racuna, brojac, izvorna_slika "
     }
 }

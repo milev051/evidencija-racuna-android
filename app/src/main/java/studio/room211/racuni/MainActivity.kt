@@ -43,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private val datum = SimpleDateFormat("dd.MM.yyyy. HH:mm", Locale("sr", "RS"))
     private val datumSaSekundama = SimpleDateFormat("dd.MM.yyyy. HH:mm:ss", Locale("sr", "RS"))
     private val imeFajla = SimpleDateFormat("yyyy-MM-dd", Locale("sr", "RS"))
+    private val vremeZaProveru = SimpleDateFormat("d.M.yyyy. HH:mm:ss", Locale.ROOT)
     private val izvrsilacUvoza = Executors.newSingleThreadExecutor()
 
     private val skener = registerForActivityResult(ScanContract()) { rezultat ->
@@ -70,6 +71,11 @@ class MainActivity : AppCompatActivity() {
     private val izvozBekapa =
         registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { gde ->
             if (gde != null) sacuvajBekap(gde)
+        }
+
+    private val izvozSpiska =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { gde ->
+            if (gde != null) sacuvajUFajl(gde) { Bekap.spisakZaObradu(it.svi()) }
         }
 
     private val vracanjeBekapa =
@@ -111,6 +117,7 @@ class MainActivity : AppCompatActivity() {
             zatraziObavestenja()
             izborIzGalerije.launch(arrayOf("image/*"))
         })
+        koren.addView(dugme(this, "Unesi ПФР број sa računa") { unosPfrBroja() })
         koren.addView(dugme(this, "Pregled kupovina") {
             startActivity(Intent(this, PregledAktivnost::class.java))
         })
@@ -175,6 +182,7 @@ class MainActivity : AppCompatActivity() {
         val kontekst = applicationContext
         izvrsilacUvoza.execute {
             var novi = 0
+            var saSlike = 0
             var duplikati = 0
             var bezQr = 0
             var neispravne = 0
@@ -189,7 +197,14 @@ class MainActivity : AppCompatActivity() {
                     try {
                         val kodovi = citac.procitaj(kontekst, slika)
                         if (kodovi.isEmpty()) {
-                            bezQr++
+                            // QR nije čitljiv: račun se pokušava pročitati sa same slike.
+                            runOnUiThread { napredak.poruka("QR nije čitljiv, čitam sa slike…") }
+                            when (saSlike(kontekst, bazaUvoza, slika)) {
+                                Ishod.NOVI -> saSlike++
+                                Ishod.POSTOJI -> duplikati++
+                                Ishod.NISTA -> bezQr++
+                            }
+                            runOnUiThread { napredak.poruka("") }
                         } else {
                             for (kod in kodovi) {
                                 if (bazaUvoza.dodajQr(kod) == -1L) {
@@ -215,11 +230,16 @@ class MainActivity : AppCompatActivity() {
             if (trebaMreza) ObradaRacuna.zakazi(kontekst)
             val poruka = buildString {
                 append("Uvezeno: ").append(novi)
+                if (saSlike > 0) append(" • pročitano sa slike: ").append(saSlike)
                 if (duplikati > 0) append(" • već sačuvano: ").append(duplikati)
                 if (bezQr > 0) append(" • bez fiskalnog QR koda: ").append(bezQr)
                 if (neispravne > 0) append(" • nečitljivo: ").append(neispravne)
-                if (novi == 0 && bezQr > 0) {
+                if (novi == 0 && saSlike == 0 && bezQr > 0) {
                     append("\nAko je QR vidljiv, iseci fotografiju oko njega i uvezi isečenu sliku.")
+                    if (Podesavanja.geminiKljuc(kontekst).isBlank()) {
+                        append("\nSa Gemini ključem u podešavanjima aplikacija ume da pročita ")
+                        append("ПФР број sa same slike i da račun proveri zvanično.")
+                    }
                 }
             }
             Obavestenja.kraj(kontekst, poruka)
@@ -229,6 +249,40 @@ class MainActivity : AppCompatActivity() {
                 osvezi()
             }
         }
+    }
+
+    private enum class Ishod { NOVI, POSTOJI, NISTA }
+
+    /**
+     * Slika bez čitljivog QR koda. Model čita ПФР број i ostala polja, pa
+     * zapis ostaje u stanju „čeka proveru" dok se ne potvrdi kod Poreske
+     * uprave. Ako ni to ne uspe, pamti se bar šta je kupljeno.
+     */
+    private fun saSlike(kontekst: android.content.Context, baza: Baza, slika: Uri): Ishod {
+        val procitano = runCatching { CitanjeSlike.procitaj(kontekst, slika) }
+            .onFailure { Podesavanja.zapisiGresku(kontekst, it.message ?: it.javaClass.simpleName) }
+            .getOrNull()
+        if (procitano == null || !procitano.upotrebljivo) return Ishod.NISTA
+
+        val ime = CitanjeSlike.imeFajla(kontekst, slika)
+        val spreman = procitano.citljivost == CitanjeSlike.PROCITAN_PFR
+        val opis = buildString {
+            if (procitano.radnja.isNotBlank()) append(procitano.radnja).append('\n')
+            append("Pročitano sa slike").append(if (ime.isBlank()) "" else ": $ime")
+            if (!spreman) append("\nПФР број nije pročitan u celosti; podaci nisu provereni.")
+        }
+        val id = baza.dodajSaSlike(
+            naziv = procitano.radnja.ifBlank { "Račun sa slike" },
+            tekst = opis,
+            brojRacuna = procitano.pfrBroj,
+            brojac = procitano.brojac,
+            ukupanIznosPara = procitano.ukupanIznosPara,
+            datumRacuna = procitano.vreme,
+            izvornaSlika = ime,
+            stanje = if (spreman) LogikaRacuna.CEKA_PROVERU else LogikaRacuna.NECITLJIVO,
+            stavke = procitano.stavke,
+        )
+        return if (id == -1L) Ishod.POSTOJI else Ishod.NOVI
     }
 
     /** Tok uvoza na vrhu ekrana, umesto prozora koji zaustavlja rad. */
@@ -253,6 +307,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = dp(10) }
         }
+        private val dodatno = maliTekst(this@MainActivity, "").apply { visibility = View.GONE }
         private val unutra: LinearLayout
 
         init {
@@ -260,6 +315,7 @@ class MainActivity : AppCompatActivity() {
             sadrzaj.addView(korak)
             sadrzaj.addView(traka)
             sadrzaj.addView(nalaz)
+            sadrzaj.addView(dodatno)
             unutra = sadrzaj
             tok.removeAllViews()
             tok.addView(kartica)
@@ -280,6 +336,12 @@ class MainActivity : AppCompatActivity() {
             nalaz.text = "Pronađenih računa: $pronadjeno"
         }
 
+        fun poruka(tekst: String) {
+            if (isDestroyed) return
+            dodatno.text = tekst
+            dodatno.visibility = if (tekst.isBlank()) View.GONE else View.VISIBLE
+        }
+
         fun zavrsi(poruka: String) {
             korak.text = "Uvoz iz galerije je gotov"
             traka.visibility = View.GONE
@@ -289,6 +351,124 @@ class MainActivity : AppCompatActivity() {
                 Obavestenja.ukloni(this@MainActivity)
             })
         }
+    }
+
+    /** Ispričana kupovina postaje zapis sa stavkama, bez otvaranja novog ekrana. */
+    private fun razloziUnos(tekst: String, posleUspeha: () -> Unit) {
+        val kontekst = applicationContext
+        Toast.makeText(this, "Šaljem tekst Gemini-ju…", Toast.LENGTH_SHORT).show()
+        izvrsilacUvoza.execute {
+            val ishod = runCatching { Diktat.sredi(kontekst, tekst) }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                ishod.onSuccess { procitano ->
+                    if (procitano == null || procitano.stavke.isEmpty()) {
+                        porukaOGresci(
+                            "Nije razloženo",
+                            IllegalStateException(
+                                "Iz teksta nije izvučena nijedna stavka. Sačuvaj ga kao belešku."
+                            ),
+                        )
+                        return@onSuccess
+                    }
+                    baza.dodajRucnoSaStavkama(
+                        naziv = procitano.radnja.ifBlank { LogikaRacuna.rucniNaziv(tekst) },
+                        tekst = tekst,
+                        ukupanIznosPara = procitano.ukupanIznosPara
+                            ?: procitano.stavke.sumOf { it.ukupnoPara }.takeIf { it > 0 },
+                        datumRacuna = procitano.vreme,
+                        stavke = procitano.stavke,
+                    )
+                    posleUspeha()
+                    osvezi()
+                    ObradaRacuna.zakazi(this)
+                    Toast.makeText(
+                        this,
+                        "Sačuvano, stavki: ${procitano.stavke.size}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }.onFailure { porukaOGresci("Nije razloženo", it) }
+            }
+        }
+    }
+
+    private fun unosPfrBroja() {
+        val stubac = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(4), dp(24), dp(4))
+        }
+        stubac.addView(maliTekst(
+            this,
+            "Prepiši četiri polja sa dna računa. Aplikacija otvara zvaničnu stranicu " +
+                "Poreske uprave sa već popunjenim poljima, a odatle preuzima sve stavke.",
+        ))
+        val (okvirBroja, unosBroja) = polje(this, "ПФР број рачуна", redova = 1)
+        val (okvirBrojaca, unosBrojaca) = polje(this, "Бројач рачуна, na primer 2078/2088ПП", redova = 1)
+        val (okvirIznosa, unosIznosa) = polje(this, "Укупан износ, na primer 1619,99", redova = 1)
+        val (okvirVremena, unosVremena) = polje(this, "ПФР време, 17.9.2026. 20:37:48", redova = 1)
+        for (okvir in listOf(okvirBroja, okvirBrojaca, okvirIznosa, okvirVremena)) {
+            stubac.addView(okvir)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Унос ПФР броја")
+            .setView(ScrollView(this).apply { addView(stubac) })
+            .setPositiveButton("Otvori proveru") { _, _ ->
+                val broj = unosBroja.text?.toString().orEmpty().trim()
+                val brojac = unosBrojaca.text?.toString().orEmpty().trim()
+                val iznos = unosIznosa.text?.toString().orEmpty().trim()
+                val vreme = unosVremena.text?.toString().orEmpty().trim()
+                if (broj.isBlank() || brojac.isBlank() || iznos.isBlank() || vreme.isBlank()) {
+                    Toast.makeText(this, "Sva četiri polja su obavezna", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val id = baza.dodajSaSlike(
+                    naziv = "Račun sa ПФР броја",
+                    tekst = "Unet ПФР број, čeka zvaničnu proveru.",
+                    brojRacuna = broj,
+                    brojac = brojac,
+                    ukupanIznosPara = LogikaRacuna.uPare(iznos),
+                    datumRacuna = LogikaRacuna.uVreme(vreme),
+                    izvornaSlika = "",
+                    stanje = LogikaRacuna.CEKA_PROVERU,
+                    stavke = emptyList(),
+                )
+                osvezi()
+                if (id == -1L) {
+                    Toast.makeText(this, "Ovaj račun je već sačuvan", Toast.LENGTH_SHORT).show()
+                } else {
+                    otvoriProveru(id, broj, brojac, iznos, vreme)
+                }
+            }
+            .setNegativeButton("Odustani", null)
+            .show()
+    }
+
+    private fun pokreniProveru(racun: Racun) {
+        otvoriProveru(
+            racun.id,
+            racun.brojRacuna,
+            racun.brojac,
+            racun.ukupanIznosPara?.let { "%d,%02d".format(it / 100, it % 100) }.orEmpty(),
+            racun.datumRacuna?.let { vremeZaProveru.format(Date(it)) }.orEmpty(),
+        )
+    }
+
+    private fun otvoriProveru(
+        id: Long,
+        broj: String,
+        brojac: String,
+        iznos: String,
+        vreme: String,
+    ) {
+        startActivity(
+            Intent(this, ProveraAktivnost::class.java)
+                .putExtra(ProveraAktivnost.ID_RACUNA, id)
+                .putExtra(ProveraAktivnost.BROJ, broj)
+                .putExtra(ProveraAktivnost.BROJAC, brojac)
+                .putExtra(ProveraAktivnost.IZNOS, iznos)
+                .putExtra(ProveraAktivnost.VREME, vreme)
+        )
     }
 
     private fun podesavanja() {
@@ -333,6 +513,21 @@ class MainActivity : AppCompatActivity() {
             vracanjeBekapa.launch(arrayOf("application/json", "text/plain", "*/*"))
         })
 
+        stubac.addView(odeljak(this, "Slike koje čekaju obradu"))
+        val cekaju = baza.svi().count {
+            it.stanje == LogikaRacuna.CEKA_PROVERU || it.stanje == LogikaRacuna.NECITLJIVO
+        }
+        stubac.addView(maliTekst(
+            this,
+            "Spisak je Markdown fajl sa slikama koje aplikacija nije mogla da pročita " +
+                "do kraja, i sa uputstvom šta sa njima. Sačuvaj ga u isti folder u kom " +
+                "stoje fotografije, pa obradu možeš da uradiš na računaru. Rezultat se " +
+                "vraća kroz „Vrati iz bekapa\". Čeka obradu: $cekaju.",
+        ))
+        stubac.addView(dugme(this, "Sačuvaj spisak za obradu") {
+            izvozSpiska.launch("racuni-za-obradu-${imeFajla.format(Date())}.md")
+        })
+
         AlertDialog.Builder(this)
             .setTitle("Podešavanja i bekap")
             .setView(ScrollView(this).apply { addView(stubac) })
@@ -351,27 +546,28 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun sacuvajBekap(gde: Uri) {
+    private fun sacuvajBekap(gde: Uri) = sacuvajUFajl(gde) { Bekap.kaoJson(it.svi()) }
+
+    private fun sacuvajUFajl(gde: Uri, napravi: (Baza) -> String) {
         val kontekst = applicationContext
         izvrsilacUvoza.execute {
             val ishod = runCatching {
                 val bazaIzvoza = Baza(kontekst)
                 val tekst = try {
-                    Bekap.kaoJson(bazaIzvoza.svi())
+                    napravi(bazaIzvoza)
                 } finally {
                     bazaIzvoza.close()
                 }
                 kontekst.contentResolver.openOutputStream(gde, "wt")
                     ?.use { it.write(tekst.toByteArray(Charsets.UTF_8)) }
                     ?: error("Nije moguće pisati u izabrani fajl")
-                tekst.length
             }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 ishod.onSuccess {
-                    Toast.makeText(this, "Bekap je sačuvan", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Fajl je sačuvan", Toast.LENGTH_SHORT).show()
                 }.onFailure {
-                    porukaOGresci("Bekap nije sačuvan", it)
+                    porukaOGresci("Fajl nije sačuvan", it)
                 }
             }
         }
@@ -423,14 +619,19 @@ class MainActivity : AppCompatActivity() {
             setText(R.string.manual_entry_title)
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
         })
-        unutra.addView(maliTekst(this, "Upiši datum kupovine, šta je kupljeno, cenu ili napomenu."))
+        unutra.addView(maliTekst(
+            this,
+            "Upiši ili izdiktiraj mikrofonom na tastaturi šta je kupljeno, gde i po " +
+                "kojoj ceni. Gemini od toga pravi stavke, pa kupovina bez računa ulazi " +
+                "u iste preglede kao i sve ostalo.",
+        ))
         val (okvir, unos) = polje(this, "Podaci o kupovini")
         okvir.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
         ).apply { topMargin = dp(10) }
         unutra.addView(okvir)
-        unutra.addView(dugme(this, "Sačuvaj ručni unos") {
+        unutra.addView(dugme(this, "Sačuvaj kao belešku") {
             val tekst = unos.text?.toString().orEmpty().trim()
             if (tekst.isBlank()) {
                 okvir.error = "Unesi bar jednu informaciju"
@@ -440,6 +641,24 @@ class MainActivity : AppCompatActivity() {
                 unos.text?.clear()
                 osvezi()
                 Toast.makeText(this, "Unos je sačuvan", Toast.LENGTH_SHORT).show()
+            }
+        })
+        unutra.addView(dugme(this, "Razloži na stavke preko Gemini-ja") {
+            val tekst = unos.text?.toString().orEmpty().trim()
+            when {
+                tekst.isBlank() -> okvir.error = "Unesi bar jednu informaciju"
+                Podesavanja.geminiKljuc(this).isBlank() -> {
+                    okvir.error = null
+                    Toast.makeText(
+                        this,
+                        "Prvo unesi Gemini ključ u „Podešavanja i bekap\"",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+                else -> {
+                    okvir.error = null
+                    razloziUnos(tekst) { unos.text?.clear() }
+                }
             }
         })
         kartica.layoutParams = LinearLayout.LayoutParams(
@@ -522,6 +741,8 @@ class MainActivity : AppCompatActivity() {
             val cekanje = when (racun.stanje) {
                 LogikaRacuna.CEKA_MREZU -> "čeka internet"
                 LogikaRacuna.GRESKA -> "obrada se ponavlja"
+                LogikaRacuna.CEKA_PROVERU -> "čeka zvaničnu proveru"
+                LogikaRacuna.NECITLJIVO -> "sa slike, nepotpuno"
                 else -> ""
             }
             if (cekanje.isNotBlank()) {
@@ -595,6 +816,17 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
+        if (LogikaRacuna.spremanZaProveru(racun) && racun.stanje != LogikaRacuna.SACUVANO) {
+            stubac.addView(odeljak(this, "Zvanična provera"))
+            stubac.addView(maliTekst(
+                this,
+                "Podaci su pročitani sa slike. Provera na stranici Poreske uprave " +
+                    "donosi tačan iznos i sve stavke. Stranica sama traži potvrdu da " +
+                    "nisi robot, pa se otvara u aplikaciji sa već popunjenim poljima.",
+            ))
+            stubac.addView(dugme(this, "Proveri preko ПФР броја") { pokreniProveru(racun) })
+        }
+
         val tehnicki = jednako(this, tehnickiPodaci(racun)).apply {
             visibility = View.GONE
             setPadding(0, dp(8), 0, 0)
@@ -655,6 +887,9 @@ class MainActivity : AppCompatActivity() {
     }.trim()
 
     private fun kadaStizuStavke(racun: Racun): String = when {
+        racun.izvor == LogikaRacuna.IZVOR_SLIKA ->
+            "Sa slike nisu pročitane pojedinačne stavke. Zvanična provera preko " +
+                "ПФР броја ih donosi tačno onako kako ih vodi Poreska uprava."
         racun.izvor == LogikaRacuna.IZVOR_RUCNO -> "Ručni unos nema pojedinačne stavke."
         LogikaRacuna.bezKorisnihPodataka(racun) ->
             "Ovaj kôd nije fiskalni račun Poreske uprave, pa nema stavki. " +
@@ -669,16 +904,26 @@ class MainActivity : AppCompatActivity() {
         if (racun.pib.isNotBlank()) append("PIB: ").append(racun.pib).append('\n')
         if (racun.brojRacuna.isNotBlank()) append("Broj računa: ").append(racun.brojRacuna).append('\n')
         append("Sačuvano u aplikaciji: ").append(datumSaSekundama.format(Date(racun.nastao))).append('\n')
-        append("Izvor: ")
-            .append(if (racun.izvor == LogikaRacuna.IZVOR_QR) "QR kôd" else "ručni unos")
-            .append('\n')
+        append("Izvor: ").append(
+            when (racun.izvor) {
+                LogikaRacuna.IZVOR_QR -> "QR kôd"
+                LogikaRacuna.IZVOR_SLIKA -> "fotografija računa"
+                else -> "ručni unos"
+            }
+        ).append('\n')
         append("Stanje: ").append(
             when (racun.stanje) {
                 LogikaRacuna.CEKA_MREZU -> "čeka internet"
                 LogikaRacuna.GRESKA -> "greška, obrada se ponavlja"
+                LogikaRacuna.CEKA_PROVERU -> "pročitano sa slike, čeka zvaničnu proveru"
+                LogikaRacuna.NECITLJIVO -> "pročitano sa slike, nepotpuno"
                 else -> "obrađeno"
             }
         ).append('\n')
+        if (racun.brojac.isNotBlank()) append("Brojač računa: ").append(racun.brojac).append('\n')
+        if (racun.izvornaSlika.isNotBlank()) {
+            append("Slika: ").append(racun.izvornaSlika).append('\n')
+        }
         if (racun.stavke.isNotEmpty()) {
             append("\nPorezi po stavkama:\n")
             for (stavka in racun.stavke) {

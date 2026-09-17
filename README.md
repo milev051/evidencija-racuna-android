@@ -47,6 +47,22 @@ Najnoviji instalacioni APK nalazi se na stranici
   zahteva prema mreži: stavke sa vremenom kupovine, zbir po radnjama i zbir po
   vrstama radnji (marketi, pekare, apoteke, benzinske stanice i slično).
   Filteri za mesec, radnju i vrstu se slažu.
+- Kada QR nije čitljiv, račun se čita sa same fotografije. Najvažnija su
+  četiri polja sa dna računa: ПФР број, бројач, укупан износ и ПФР време, jer
+  se njima račun proverava na zvaničnoj stranici Poreske uprave.
+- Ta stranica je zaštićena reCAPTCHA-om, pa se obrazac ne može poslati sa
+  strane. Zato se otvara u aplikaciji sa već popunjenim poljima; potvrda da
+  nisi robot ostaje na stranici. Kada se račun pojavi, aplikacija ga pokupi i
+  upiše u isti zapis, sa svim stavkama.
+- Isti ekran radi i za ručno prepisan ПФР број, bez ijedne fotografije.
+- Svaki zapis pamti ime slike iz koje je nastao, pa se zna koje su fotografije
+  već obrađene i bez premeštanja fajlova.
+- Zapisi se razlikuju po tome dokle se stiglo: „čeka zvaničnu proveru" kada su
+  sva četiri polja pročitana, „sa slike, nepotpuno" kada nisu.
+- Spisak slika koje čekaju obradu izvozi se kao Markdown fajl sa uputstvom, za
+  obradu na računaru. Rezultat se vraća kroz „Vrati iz bekapa".
+- Kupovina bez računa se izdiktira mikrofonom na tastaturi u polje „Nemam
+  račun", a Gemini je razloži na stavke sa cenama.
 - Proizvode razvrstava Gemini, ako se u podešavanjima unese lični API ključ.
   Šalju se samo nazivi proizvoda, nikada iznosi, radnja, PIB ni broj računa.
   Svaki naziv se pita najviše jednom: odgovor se pamti po ključu proizvoda,

@@ -3,8 +3,6 @@ package studio.room211.racuni
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Razvrstavanje proizvoda preko Gemini-ja.
@@ -69,7 +67,7 @@ object Kategorije {
             if (zaModel.isEmpty()) continue
 
             val odgovor = try {
-                procitajOdgovor(posalji(model, kljuc, upit(zaModel)))
+                procitajOdgovor(Gemini.odgovor(model, kljuc, upit(zaModel)))
             } catch (e: Exception) {
                 Podesavanja.zapisiGresku(context, e.message ?: e.javaClass.simpleName)
                 return razvrstano
@@ -91,7 +89,7 @@ object Kategorije {
         return razvrstano
     }
 
-    internal fun upit(nazivi: List<String>): String {
+    internal fun upit(nazivi: List<String>): JSONObject {
         val spisakProizvoda = nazivi.mapIndexed { redni, naziv -> "${redni + 1}. $naziv" }
             .joinToString("\n")
         val uputstvo = buildString {
@@ -105,36 +103,11 @@ object Kategorije {
             append("[{\"naziv\": \"tačan naziv iz spiska\", \"kategorija\": \"...\", \"zdravlje\": \"...\"}]\n\n")
             append("Proizvodi:\n").append(spisakProizvoda)
         }
-        return JSONObject()
-            .put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put("parts", JSONArray().put(JSONObject().put("text", uputstvo)))
-                )
-            )
-            .put(
-                "generationConfig",
-                JSONObject()
-                    .put("temperature", 0)
-                    .put("responseMimeType", "application/json"),
-            )
-            .toString()
+        return Gemini.telo(uputstvo)
     }
 
     internal fun procitajOdgovor(json: String): Map<String, Pojam> {
-        val telo = JSONObject(json)
-        val kandidati = telo.optJSONArray("candidates")
-            ?: error("Odgovor nema sadržaj; proveri ključ i naziv modela.")
-        if (kandidati.length() == 0) error("Model nije vratio odgovor.")
-        val delovi = kandidati.getJSONObject(0)
-            .optJSONObject("content")
-            ?.optJSONArray("parts")
-            ?: error("Odgovor nema tekst.")
-        val tekst = buildString {
-            for (i in 0 until delovi.length()) append(delovi.getJSONObject(i).optString("text"))
-        }.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-
-        val niz = JSONArray(tekst)
+        val niz = JSONArray(Gemini.tekstOdgovora(json))
         val rezultat = LinkedHashMap<String, Pojam>()
         for (i in 0 until niz.length()) {
             val red = niz.getJSONObject(i)
@@ -147,30 +120,6 @@ object Kategorije {
             rezultat[naziv] = Pojam(kategorija, zdravlje)
         }
         return rezultat
-    }
-
-    private fun posalji(model: String, kljuc: String, telo: String): String {
-        val adresa =
-            "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
-        val veza = URL(adresa).openConnection() as HttpURLConnection
-        try {
-            veza.connectTimeout = 12_000
-            veza.readTimeout = 30_000
-            veza.requestMethod = "POST"
-            veza.doOutput = true
-            veza.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            veza.setRequestProperty("x-goog-api-key", kljuc)
-            veza.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(telo) }
-
-            val kod = veza.responseCode
-            if (kod !in 200..299) {
-                val opis = veza.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-                error("Gemini je vratio HTTP $kod. ${opis.orEmpty().take(200)}")
-            }
-            return veza.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        } finally {
-            veza.disconnect()
-        }
     }
 
     data class Pojam(val kategorija: String, val zdravlje: String)

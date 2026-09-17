@@ -18,6 +18,8 @@ data class Racun(
     val opstina: String,
     val ukupanIznosPara: Long?,
     val brojRacuna: String,
+    val brojac: String,
+    val izvornaSlika: String,
     val stavke: List<Stavka>,
 )
 
@@ -53,9 +55,19 @@ object LogikaRacuna {
 
     const val IZVOR_QR = "QR"
     const val IZVOR_RUCNO = "RUCNO"
+
+    /** Račun pročitan sa fotografije, kada QR nije bio čitljiv. */
+    const val IZVOR_SLIKA = "SLIKA"
+
     const val CEKA_MREZU = "CEKA_MREZU"
     const val SACUVANO = "SACUVANO"
     const val GRESKA = "GRESKA"
+
+    /** Podaci su pročitani sa slike, ali ih još nije potvrdila Poreska uprava. */
+    const val CEKA_PROVERU = "CEKA_PROVERU"
+
+    /** Sa slike nije moglo da se pročita ništa upotrebljivo. */
+    const val NECITLJIVO = "NECITLJIVO"
 
     fun internetAdresa(sadrzaj: String): Boolean {
         val vrednost = sadrzaj.trim()
@@ -142,6 +154,35 @@ object LogikaRacuna {
         .replace(Regex("\\s+"), " ")
         .trim()
         .uppercase(SRPSKI)
+
+    /** Za proveru na zvaničnoj stranici potrebna su tačno ova četiri podatka. */
+    fun spremanZaProveru(racun: Racun): Boolean =
+        racun.brojRacuna.isNotBlank() &&
+            racun.brojac.isNotBlank() &&
+            racun.ukupanIznosPara != null &&
+            racun.datumRacuna != null
+
+    /** „1.619,99" i „1619,99" daju isti broj u parama. */
+    fun uPare(tekst: String): Long? = runCatching {
+        tekst.replace(".", "").replace(",", ".").replace(" ", "").trim()
+            .toBigDecimal().movePointRight(2)
+            .setScale(0, java.math.RoundingMode.HALF_UP).longValueExact()
+    }.getOrNull()
+
+    /** Vreme sa fiskalnog računa je uvek u beogradskoj zoni. */
+    fun uVreme(tekst: String): Long? {
+        if (tekst.isBlank()) return null
+        for (oblik in listOf("d.M.yyyy. HH:mm:ss", "d.M.yyyy. HH:mm", "d.M.yyyy HH:mm:ss")) {
+            val vreme = runCatching {
+                java.text.SimpleDateFormat(oblik, java.util.Locale.ROOT).apply {
+                    isLenient = false
+                    timeZone = java.util.TimeZone.getTimeZone("Europe/Belgrade")
+                }.parse(tekst.trim())?.time
+            }.getOrNull()
+            if (vreme != null) return vreme
+        }
+        return null
+    }
 
     fun rucniNaziv(tekst: String): String = tekst
         .lineSequence()

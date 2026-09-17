@@ -44,6 +44,7 @@ class PregledAktivnost : AppCompatActivity() {
     private var vrsta: String? = null
     private var kategorija: String? = null
     private var zdravlje: String? = null
+    private var poCeni = false
     private var racuni: List<Racun> = emptyList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -129,6 +130,13 @@ class PregledAktivnost : AppCompatActivity() {
         }
         filteri.addView(prikazi)
 
+        if (prikaz == Prikaz.STAVKE) {
+            val redosled = ChipGroup(this).apply { isSingleSelection = true }
+            redosled.addView(cip("Najnovije prvo", !poCeni) { poCeni = false; osvezi() })
+            redosled.addView(cip("Najskuplje prvo", poCeni) { poCeni = true; osvezi() })
+            filteri.addView(redosled)
+        }
+
         val meseci = racuni.map { kljucMeseca.format(Date(vreme(it))) }.distinct().sortedDescending()
         if (meseci.size > 1 || mesec != null) {
             filteri.addView(odeljak(this, "Mesec"))
@@ -157,6 +165,11 @@ class PregledAktivnost : AppCompatActivity() {
         val saStavkama = izabrani
             .map { racun -> racun to racun.stavke.filter { uKategoriji(it) } }
             .filter { (_, stavke) -> stavke.isNotEmpty() }
+            .let { spisak ->
+                // Po ceni se gleda zbir prikazanih stavki, ne ceo račun.
+                if (poCeni) spisak.sortedByDescending { (_, stavke) -> stavke.sumOf { it.ukupnoPara } }
+                else spisak
+            }
         if (saStavkama.isEmpty()) {
             sadrzaj.addView(maliTekst(this, "Za izabrani filter nema pojedinačnih stavki."))
             return
@@ -168,7 +181,8 @@ class PregledAktivnost : AppCompatActivity() {
                 setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
             })
             unutra.addView(maliTekst(this, LogikaRacuna.kratakNazivRadnje(nazivRadnje(racun))))
-            for (stavka in stavke) {
+            val poredaneStavke = if (poCeni) stavke.sortedByDescending { it.ukupnoPara } else stavke
+            for (stavka in poredaneStavke) {
                 unutra.addView(vrednost(this, "• ${stavka.naziv}"))
                 val opis = buildString {
                     append(stavka.kolicina).append(" × ").append(dinari(stavka.jedinicnaCenaPara))

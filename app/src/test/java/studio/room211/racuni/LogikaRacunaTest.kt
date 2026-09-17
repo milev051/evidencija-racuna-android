@@ -109,6 +109,41 @@ class LogikaRacunaTest {
         assertEquals(racun.copy(id = 0), vraceni.first())
     }
 
+    @Test fun citanjeSaSlikeTraziSvaCetiriPoljaZaProveru() {
+        val potpuno = CitanjeSlike.procitajOdgovor(
+            """{"pfr_broj":"JLWDW4VM-JLWDW4VM-2088","brojac":"2078/2088ПП",""" +
+                """"ukupan_iznos":"1.619,99","pfr_vreme":"17.9.2026. 20:37:48",""" +
+                """"radnja":"LILLY DROGERIE","stavke":[]}"""
+        )
+        assertEquals(CitanjeSlike.PROCITAN_PFR, potpuno.citljivost)
+        assertEquals(161999L, potpuno.ukupanIznosPara)
+        assertTrue(potpuno.vreme != null)
+
+        // Bez ПФР времена provera nije moguća, ali zapis i dalje ima smisla.
+        val delimicno = CitanjeSlike.procitajOdgovor(
+            """{"pfr_broj":"JLWDW4VM-JLWDW4VM-2088","brojac":"","ukupan_iznos":"1619,99",""" +
+                """"pfr_vreme":"","radnja":"","stavke":[{"naziv":"Magnezijum","kolicina":"1",""" +
+                """"cena":"1619,99","ukupno":"1619,99"}]}"""
+        )
+        assertEquals(CitanjeSlike.DELIMICNO, delimicno.citljivost)
+        assertEquals(1, delimicno.stavke.size)
+        assertTrue(delimicno.upotrebljivo)
+
+        val prazno = CitanjeSlike.procitajOdgovor(
+            """{"pfr_broj":"","brojac":"","ukupan_iznos":"","pfr_vreme":"","radnja":"","stavke":[]}"""
+        )
+        assertEquals(CitanjeSlike.NECITLJIVO, prazno.citljivost)
+        assertFalse(prazno.upotrebljivo)
+    }
+
+    @Test fun iznosIVremeSaRacunaSeCitajuSrpskimOblikom() {
+        assertEquals(161999L, LogikaRacuna.uPare("1.619,99"))
+        assertEquals(161999L, LogikaRacuna.uPare("1619,99"))
+        assertEquals(null, LogikaRacuna.uPare("nema"))
+        assertTrue(LogikaRacuna.uVreme("17.9.2026. 20:37:48") != null)
+        assertEquals(null, LogikaRacuna.uVreme(""))
+    }
+
     private fun prazanRacun(qrSadrzaj: String, preduzece: String = ""): Racun = Racun(
         id = 1,
         nastao = 0,
@@ -127,6 +162,8 @@ class LogikaRacunaTest {
         opstina = "",
         ukupanIznosPara = null,
         brojRacuna = "",
+        brojac = "",
+        izvornaSlika = "",
         stavke = emptyList(),
     )
 

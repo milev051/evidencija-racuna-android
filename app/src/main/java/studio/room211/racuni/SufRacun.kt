@@ -29,10 +29,15 @@ object SufRacun {
 
     fun preuzmi(adresa: String): AnalizaRacuna {
         require(podrzan(adresa)) { "Nije podržan link za proveru fiskalnog računa" }
-        val html = zahtev(adresa.trim())
+        return izStranice(zahtev(adresa.trim()))
+    }
+
+    /** Ista stranica, samo kada je već otvorena u aplikaciji posle provere. */
+    fun izStranice(html: String): AnalizaRacuna {
         val zaglavlje = parsirajZaglavlje(html)
-        val specifikacije = zahtevZaStavke(zaglavlje.brojRacuna, zaglavlje.token)
-        return zaglavlje.analiza.copy(stavke = specifikacije)
+        return zaglavlje.analiza.copy(
+            stavke = zahtevZaStavke(zaglavlje.brojRacuna, zaglavlje.token)
+        )
     }
 
     internal fun parsirajZaglavlje(html: String): ParsiranoZaglavlje {
@@ -138,20 +143,10 @@ object SufRacun {
         return jaka.parent()?.selectFirst("span")?.text()?.trim().orEmpty()
     }
 
-    private fun parsirajDatum(tekst: String): Long? {
-        if (tekst.isBlank()) return null
-        return runCatching {
-            SimpleDateFormat("d.M.yyyy. HH:mm:ss", Locale.ROOT).apply {
-                isLenient = false
-                timeZone = TimeZone.getTimeZone("Europe/Belgrade")
-            }.parse(tekst)?.time
-        }.getOrNull()
-    }
+    // Isto čitanje datuma i iznosa koristi i čitanje računa sa fotografije.
+    private fun parsirajDatum(tekst: String): Long? = LogikaRacuna.uVreme(tekst)
 
-    private fun uPareSrpski(tekst: String): Long? = runCatching {
-        tekst.replace(".", "").replace(",", ".").replace(" ", "")
-            .toBigDecimal().movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact()
-    }.getOrNull()
+    private fun uPareSrpski(tekst: String): Long? = LogikaRacuna.uPare(tekst)
 
     private fun uPareJson(objekat: JSONObject, kljuc: String): Long =
         BigDecimal(objekat.get(kljuc).toString())

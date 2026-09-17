@@ -50,6 +50,8 @@ object Bekap {
                     .put("opstina", racun.opstina)
                     .put("ukupan_iznos_para", racun.ukupanIznosPara ?: JSONObject.NULL)
                     .put("broj_racuna", racun.brojRacuna)
+                    .put("brojac", racun.brojac)
+                    .put("izvorna_slika", racun.izvornaSlika)
                     .put("stavke", stavke)
             )
         }
@@ -58,6 +60,75 @@ object Bekap {
             .put("napravljen", System.currentTimeMillis())
             .put("racuni", niz)
             .toString(2)
+    }
+
+    /**
+     * Spisak slika koje čekaju ruku ili jači model, u Markdown-u.
+     *
+     * Ide u isti folder u kom stoje fotografije, pa agent na računaru zna
+     * tačno koju sliku da otvori i šta da uradi, a rezultat vraća kao bekap
+     * koji aplikacija ume da uveze.
+     */
+    fun spisakZaObradu(racuni: List<Racun>, vreme: Long = System.currentTimeMillis()): String {
+        val datum = java.text.SimpleDateFormat("dd.MM.yyyy. HH:mm", java.util.Locale("sr", "RS"))
+        val cekaProveru = racuni.filter { it.stanje == LogikaRacuna.CEKA_PROVERU }
+        val nepotpuni = racuni.filter { it.stanje == LogikaRacuna.NECITLJIVO }
+
+        return buildString {
+            append("# Računi koji čekaju obradu\n\n")
+            append("Napravljeno: ").append(datum.format(java.util.Date(vreme))).append("\n\n")
+
+            append("## Čeka zvaničnu proveru\n\n")
+            if (cekaProveru.isEmpty()) append("Nema takvih zapisa.\n") else {
+                append("Podaci su pročitani, treba ih samo poslati na `suf.purs.gov.rs/verify`.\n\n")
+                for (racun in cekaProveru) append(red(racun)).append('\n')
+            }
+
+            append("\n## Nepotpuno pročitano sa slike\n\n")
+            if (nepotpuni.isEmpty()) append("Nema takvih zapisa.\n") else {
+                append("Sa ovih slika nedostaje bar jedno polje za proveru.\n\n")
+                for (racun in nepotpuni) {
+                    append(red(racun))
+                    val fali = listOfNotNull(
+                        "ПФР број".takeIf { racun.brojRacuna.isBlank() },
+                        "бројач".takeIf { racun.brojac.isBlank() },
+                        "износ".takeIf { racun.ukupanIznosPara == null },
+                        "време".takeIf { racun.datumRacuna == null },
+                    )
+                    if (fali.isNotEmpty()) append(" (nedostaje: ").append(fali.joinToString(", ")).append(")")
+                    append('\n')
+                }
+            }
+
+            append("\n## Šta treba uraditi\n\n")
+            append("1. Za svaku sliku pročitaj sa fotografije: ПФР број рачуна, ")
+            append("бројач рачуна, укупан износ и ПФР време.\n")
+            append("2. Na `https://suf.purs.gov.rs/verify` unesi ta četiri polja ")
+            append("i otvori račun; stranica traži potvrdu da nisi robot, pa to ide ručno.\n")
+            append("3. Sa otvorenog računa prepiši prodavnicu, iznos i sve stavke.\n")
+            append("4. Rezultat upiši kao bekap fajl ovog oblika, pa ga u aplikaciji ")
+            append("vrati preko „Vrati iz bekapa\":\n\n")
+            append("```json\n")
+            append("{\"verzija\": ").append(VERZIJA).append(", \"racuni\": [\n")
+            append("  {\"nastao\": 0, \"izvor\": \"QR\", \"naziv\": \"LIDL\", ")
+            append("\"qr_sadrzaj\": \"https://suf.purs.gov.rs/v/?vl=...\", \"stanje\": \"CEKA_MREZU\", ")
+            append("\"izvorna_slika\": \"IMG_2031.jpg\", \"stavke\": []}\n")
+            append("]}\n")
+            append("```\n\n")
+            append("Ako je poznat zvanični link računa, dovoljno je upisati ga u ")
+            append("`qr_sadrzaj` uz stanje `CEKA_MREZU`: aplikacija sama preuzima ")
+            append("prodavnicu, iznos i stavke čim dobije internet.\n")
+        }
+    }
+
+    private fun red(racun: Racun): String = buildString {
+        append("- ").append(racun.izvornaSlika.ifBlank { "bez slike" })
+        val podaci = listOfNotNull(
+            racun.brojRacuna.takeIf { it.isNotBlank() }?.let { "ПФР број $it" },
+            racun.brojac.takeIf { it.isNotBlank() }?.let { "бројач $it" },
+            racun.ukupanIznosPara?.let { "износ %d,%02d".format(it / 100, it % 100) },
+        )
+        if (podaci.isNotEmpty()) append(" — ").append(podaci.joinToString(", "))
     }
 
     fun izJson(tekst: String): List<Racun> {
@@ -90,6 +161,8 @@ object Bekap {
                         ukupanIznosPara = if (red.isNull("ukupan_iznos_para")) null
                         else red.optLong("ukupan_iznos_para"),
                         brojRacuna = red.optString("broj_racuna"),
+                        brojac = red.optString("brojac"),
+                        izvornaSlika = red.optString("izvorna_slika"),
                         stavke = (0 until stavke.length()).map { j ->
                             val s = stavke.getJSONObject(j)
                             Stavka(
