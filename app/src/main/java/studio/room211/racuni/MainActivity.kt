@@ -2,9 +2,12 @@ package studio.room211.racuni
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
 import android.view.Menu
 import android.view.View
 import android.view.ViewGroup
@@ -16,14 +19,19 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.view.setPadding
 import androidx.work.WorkManager
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.progressindicator.LinearProgressIndicator
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import com.google.zxing.client.android.BeepManager
+import com.journeyapps.barcodescanner.BarcodeCallback
+import com.journeyapps.barcodescanner.BarcodeResult
+import com.journeyapps.barcodescanner.DecoratedBarcodeView
+import com.journeyapps.barcodescanner.Size
 import studio.room211.racuni.Ui.dinari
 import studio.room211.racuni.Ui.dp
 import studio.room211.racuni.Ui.dugme
@@ -54,33 +62,25 @@ class MainActivity : AppCompatActivity() {
     private var pregled: PregledPrikaz? = null
     private var tab = Tab.SKENIRANJE
     private var kameraPokrenuta = false
+    private var kameraUTabu = false
+    private var barkod: DecoratedBarcodeView? = null
+    private val zvuk: BeepManager by lazy { BeepManager(this) }
     private val datum = SimpleDateFormat("dd.MM.yyyy. HH:mm", Locale("sr", "RS"))
     private val datumSaSekundama = SimpleDateFormat("dd.MM.yyyy. HH:mm:ss", Locale("sr", "RS"))
     private val imeFajla = SimpleDateFormat("yyyy-MM-dd", Locale("sr", "RS"))
     private val vremeZaProveru = SimpleDateFormat("d.M.yyyy. HH:mm:ss", Locale.ROOT)
     private val izvrsilacUvoza = Executors.newSingleThreadExecutor()
+    // Zaseban tok, da provera izdanja ne čeka da se završi uvoz slika.
+    private val izvrsilacMreze = Executors.newSingleThreadExecutor()
 
-    private val skener = registerForActivityResult(ScanContract()) { rezultat ->
-        val sadrzaj = rezultat.contents
-        if (sadrzaj.isNullOrBlank()) {
-            Toast.makeText(this, "Skeniranje je otkazano", Toast.LENGTH_SHORT).show()
-        } else if (!SufRacun.podrzan(sadrzaj)) {
-            Toast.makeText(
-                this,
-                "Kod je pročitan, ali nije fiskalni QR Poreske uprave",
-                Toast.LENGTH_LONG,
-            ).show()
-        } else {
-            val dodat = baza.dodajQr(sadrzaj) != -1L
-            if (dodat) ObradaRacuna.zakazi(this)
-            osvezi()
-            Toast.makeText(
-                this,
-                if (dodat) "QR je sačuvan lokalno" else "Ovaj račun je već sačuvan",
-                Toast.LENGTH_SHORT,
-            ).show()
+    private val dozvolaZaKameru =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { data ->
+            if (tab == Tab.SKENIRANJE) otvoriTab(Tab.SKENIRANJE)
+            if (!data) {
+                Toast.makeText(this, "Bez dozvole za kameru nema skeniranja", Toast.LENGTH_LONG)
+                    .show()
+            }
         }
-    }
 
     private val izvozBekapa =
         registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { gde ->
@@ -146,6 +146,8 @@ class MainActivity : AppCompatActivity() {
         )
         setContentView(koren)
 
+        kameraUTabu = Podesavanja.kameraOdmah(this) && !kameraPokrenuta
+        kameraPokrenuta = true
         otvoriTab(tab)
         donjaTraka.selectedItemId = tab.ordinal + 1
 
@@ -154,11 +156,6 @@ class MainActivity : AppCompatActivity() {
             .observe(this) { osvezi() }
         ObradaRacuna.zakazi(this)
 
-        // Kamera prva, ako je tako podešeno; povratak je dugme u skeneru.
-        if (!kameraPokrenuta && Podesavanja.kameraOdmah(this)) {
-            kameraPokrenuta = true
-            pokreniSkener()
-        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -167,6 +164,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun otvoriTab(izabran: Tab) {
+        // Dodir na tab „Skeniranje" uvek otvara kameru; izlaz je dugme u uglu.
+        if (izabran == Tab.SKENIRANJE && tab != Tab.SKENIRANJE) kameraUTabu = true
+        barkod?.pause()
+        barkod = null
         tab = izabran
         stanje = null
         ciscenje = null
@@ -210,28 +211,139 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
-    /** Prvi tab: skeniranje i unos bez računa. */
-    private fun tabSkeniranje(): View {
+    /** Prvi tab: kamera, ili ekran za unos kada se kamera zatvori. */
+    private fun tabSkeniranje(): View =
+        if (kameraUTabu) ekranKamere() else ekranUnosa()
+
+    /**
+     * Kamera stoji unutar taba, pa tri taba na dnu ostaju vidljiva i ne gubi
+     * se osećaj gde si. U uglu je izlaz na ekran za unos.
+     */
+    private fun ekranKamere(): View {
+        val okvir = FrameLayout(this)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            val sadrzaj = stubac()
+            sadrzaj.addView(naslov("Kamera", "Za skeniranje je potrebna dozvola za kameru."))
+            sadrzaj.addView(dugme(this, "Dozvoli kameru", glavno = true) {
+                dozvolaZaKameru.launch(Manifest.permission.CAMERA)
+            })
+            sadrzaj.addView(dugme(this, "Nazad na unos") { zatvoriKameru() })
+            return uListu(sadrzaj)
+        }
+
+        val strana = stranaOkvira()
+        val prikaz = DecoratedBarcodeView(this).apply {
+            statusView.visibility = View.GONE
+            viewFinder.setLaserVisibility(false)
+            viewFinder.setMaskColor(Color.TRANSPARENT)
+            barcodeView.setFramingRectSize(Size(strana, strana))
+            barcodeView.decoderFactory = com.journeyapps.barcodescanner.DefaultDecoderFactory(
+                listOf(com.google.zxing.BarcodeFormat.QR_CODE)
+            )
+        }
+        barkod = prikaz
+        okvir.addView(
+            prikaz,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        okvir.addView(
+            OkvirSkenera(this, strana),
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        okvir.addView(
+            MaterialButton(
+                this,
+                null,
+                com.google.android.material.R.attr.materialButtonOutlinedStyle,
+            ).apply {
+                text = "Nazad na unos"
+                setTextColor(Color.WHITE)
+                strokeColor = android.content.res.ColorStateList.valueOf(Color.WHITE)
+                setOnClickListener { zatvoriKameru() }
+            },
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                topMargin = dp(12)
+                marginStart = dp(12)
+            },
+        )
+        prikaz.resume()
+        prikaz.decodeSingle(povratniPoziv())
+        return okvir
+    }
+
+    /** Kvadrat zauzima veći deo kraće stranice, ali ne ceo tab. */
+    private fun stranaOkvira(): Int {
+        val mere = resources.displayMetrics
+        val kraca = minOf(mere.widthPixels, mere.heightPixels)
+        return minOf((kraca * 0.62f).toInt(), (300 * mere.density).toInt())
+    }
+
+    private fun povratniPoziv(): BarcodeCallback = object : BarcodeCallback {
+        override fun barcodeResult(rezultat: BarcodeResult) {
+            zvuk.playBeepSoundAndVibrate()
+            obradiKod(rezultat.text)
+            // Kratka pauza, da isti kôd ne uđe dva puta dok se telefon odmiče.
+            barkod?.postDelayed({ barkod?.decodeSingle(povratniPoziv()) }, 1_500)
+        }
+    }
+
+    private fun obradiKod(sadrzaj: String?) {
+        if (sadrzaj.isNullOrBlank()) return
+        if (!SufRacun.podrzan(sadrzaj)) {
+            Toast.makeText(
+                this,
+                "Kôd je pročitan, ali nije fiskalni QR Poreske uprave",
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        val dodat = baza.dodajQr(sadrzaj) != -1L
+        if (dodat) ObradaRacuna.zakazi(this)
+        osvezi()
+        Toast.makeText(
+            this,
+            if (dodat) "QR je sačuvan lokalno" else "Ovaj račun je već sačuvan",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    private fun zatvoriKameru() {
+        kameraUTabu = false
+        otvoriTab(Tab.SKENIRANJE)
+    }
+
+    private fun ekranUnosa(): View {
         val sadrzaj = stubac()
         sadrzaj.addView(naslov("Računi", "Skeniraj sada, obradi kada se pojavi internet."))
-        sadrzaj.addView(dugme(this, "Skeniraj QR kôd", glavno = true) { pokreniSkener() })
+        sadrzaj.addView(dugme(this, "Otvori kameru", glavno = true) {
+            kameraUTabu = true
+            otvoriTab(Tab.SKENIRANJE)
+        })
 
-        val prekidac = MaterialSwitch(this).apply {
+        sadrzaj.addView(MaterialSwitch(this).apply {
             text = "Kamera se otvara odmah po pokretanju"
             isChecked = Podesavanja.kameraOdmah(this@MainActivity)
             setPadding(dp(4), dp(14), dp(4), dp(6))
             setOnCheckedChangeListener { _, ukljuceno ->
                 Podesavanja.sacuvajKameraOdmah(this@MainActivity, ukljuceno)
             }
-        }
-        sadrzaj.addView(prekidac)
+        })
         sadrzaj.addView(maliTekst(
             this,
-            "Kada je uključeno, aplikacija se otvara na kameri, a dugme „Nazad u " +
-                "aplikaciju\" vraća na ovaj ekran.",
+            "Kamera se u svakom slučaju otvara kada se dodirne tab „Skeniranje\"; " +
+                "ovim se bira da li je otvorena i odmah po pokretanju aplikacije.",
         ))
 
         sadrzaj.addView(rucniUnos())
+        sadrzaj.addView(dugme(this, "Podešavanja i bekap") { podesavanja() })
 
         val stanjeTekst = maliTekst(this, "").apply { setPadding(dp(4), dp(14), dp(4), dp(4)) }
         stanje = stanjeTekst
@@ -252,7 +364,6 @@ class MainActivity : AppCompatActivity() {
             izborIzGalerije.launch(arrayOf("image/*"))
         })
         sadrzaj.addView(dugme(this, "Unesi ПФР број sa računa") { unosPfrBroja() })
-        sadrzaj.addView(dugme(this, "Podešavanja i bekap") { podesavanja() })
 
         val ocistiSe = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         ciscenje = ocistiSe
@@ -274,12 +385,22 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (kameraUTabu && tab == Tab.SKENIRANJE) {
+            barkod?.resume()
+            barkod?.decodeSingle(povratniPoziv())
+        }
         osvezi()
+    }
+
+    override fun onPause() {
+        barkod?.pause()
+        super.onPause()
     }
 
     override fun onDestroy() {
         baza.close()
         izvrsilacUvoza.shutdown()
+        izvrsilacMreze.shutdown()
         super.onDestroy()
     }
 
@@ -288,19 +409,6 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Obavestenja.dozvoljeno(this)) {
             dozvolaZaObavestenja.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-    }
-
-    private fun pokreniSkener() {
-        skener.launch(
-            ScanOptions().apply {
-                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                setCaptureActivity(SkenerAktivnost::class.java)
-                setPrompt("")
-                setBeepEnabled(true)
-                setOrientationLocked(false)
-                setBarcodeImageEnabled(false)
-            }
-        )
     }
 
     private fun uveziSlike(slike: List<Uri>) {
@@ -520,6 +628,84 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun proveriAzuriranje() {
+        Toast.makeText(this, "Proveravam GitHub izdanja…", Toast.LENGTH_SHORT).show()
+        izvrsilacMreze.execute {
+            val ishod = runCatching { Azuriranje.poslednje() }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                ishod.onSuccess { izdanje ->
+                    val trenutna = Azuriranje.trenutnaVerzija(this)
+                    if (!Azuriranje.novije(trenutna, izdanje.oznaka)) {
+                        Toast.makeText(
+                            this,
+                            "Već imaš najnoviju verziju ($trenutna)",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        return@onSuccess
+                    }
+                    AlertDialog.Builder(this)
+                        .setTitle("Nova verzija: ${izdanje.naslov}")
+                        .setMessage(
+                            "Instalirana je $trenutna, a na GitHub-u stoji ${izdanje.oznaka}. " +
+                                "Preuzimanje je oko 24 MB."
+                        )
+                        .setPositiveButton("Preuzmi i instaliraj") { _, _ -> preuzmiIzdanje(izdanje) }
+                        .setNegativeButton("Ne sada", null)
+                        .show()
+                }.onFailure { porukaOGresci("Provera nije uspela", it) }
+            }
+        }
+    }
+
+    private fun preuzmiIzdanje(izdanje: Azuriranje.Izdanje) {
+        if (!Azuriranje.smeDaInstalira(this)) {
+            AlertDialog.Builder(this)
+                .setTitle("Potrebna dozvola")
+                .setMessage(
+                    "Android traži da aplikaciji dozvoliš instaliranje aplikacija iz " +
+                        "nepoznatih izvora. Otvoriću podešavanja, pa se vrati nazad i " +
+                        "probaj ponovo."
+                )
+                .setPositiveButton("Otvori podešavanja") { _, _ -> Azuriranje.otvoriDozvolu(this) }
+                .setNegativeButton("Odustani", null)
+                .show()
+            return
+        }
+
+        val traka = LinearProgressIndicator(this).apply {
+            max = 100
+            progress = 0
+        }
+        val prozor = AlertDialog.Builder(this)
+            .setTitle("Preuzimam ${izdanje.oznaka}")
+            .setView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(24), dp(20), dp(24), dp(8))
+                addView(traka)
+            })
+            .setCancelable(false)
+            .create()
+        prozor.show()
+
+        val kontekst = applicationContext
+        izvrsilacMreze.execute {
+            val ishod = runCatching {
+                Azuriranje.preuzmi(kontekst, izdanje.adresaApk) { deo ->
+                    runOnUiThread { traka.setProgressCompat(deo, true) }
+                }
+            }
+            runOnUiThread {
+                if (prozor.isShowing && !isFinishing && !isDestroyed) prozor.dismiss()
+                if (isDestroyed) return@runOnUiThread
+                ishod.onSuccess { fajl ->
+                    runCatching { Azuriranje.instaliraj(this, fajl) }
+                        .onFailure { porukaOGresci("Instalacija nije pokrenuta", it) }
+                }.onFailure { porukaOGresci("Preuzimanje nije uspelo", it) }
+            }
+        }
+    }
+
     private fun unosPfrBroja() {
         val stubac = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -604,6 +790,15 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(4), dp(24), dp(4))
         }
+
+        stubac.addView(odeljak(this, "Verzija i ažuriranje"))
+        stubac.addView(maliTekst(
+            this,
+            "Instalirana verzija: ${Azuriranje.trenutnaVerzija(this)}. Aplikacija nije na " +
+                "Google Play-u, pa se nova verzija preuzima sa GitHub izdanja i instalira " +
+                "kao i svaki drugi APK.",
+        ))
+        stubac.addView(dugme(this, "Proveri ažuriranje") { proveriAzuriranje() })
 
         stubac.addView(odeljak(this, "Razvrstavanje proizvoda"))
         stubac.addView(maliTekst(

@@ -144,6 +144,33 @@ class LogikaRacunaTest {
         assertEquals(null, LogikaRacuna.uVreme(""))
     }
 
+    @Test fun novijaVerzijaSePorediBrojemAneTekstom() {
+        assertTrue(Azuriranje.novije("0.9", "v0.11"))
+        assertTrue(Azuriranje.novije("0.11", "0.11.1"))
+        assertFalse(Azuriranje.novije("0.11", "v0.11"))
+        assertFalse(Azuriranje.novije("1.0", "v0.12"))
+    }
+
+    @Test fun izdanjeSeCitaSaApkPrilogom() {
+        val json = JSONObject()
+            .put("tag_name", "v0.12")
+            .put("name", "Računi 0.12")
+            .put(
+                "assets",
+                JSONArray()
+                    .put(JSONObject().put("name", "beleske.md").put("browser_download_url", "https://x/md"))
+                    .put(
+                        JSONObject().put("name", "Racuni-0.12.apk")
+                            .put("browser_download_url", "https://x/Racuni-0.12.apk")
+                    ),
+            )
+            .toString()
+
+        val izdanje = Azuriranje.izOdgovora(json)
+        assertEquals("v0.12", izdanje.oznaka)
+        assertEquals("https://x/Racuni-0.12.apk", izdanje.adresaApk)
+    }
+
     private fun prazanRacun(qrSadrzaj: String, preduzece: String = ""): Racun = Racun(
         id = 1,
         nastao = 0,
