@@ -3,7 +3,6 @@ package studio.room211.racuni
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import org.json.JSONObject
@@ -119,8 +118,7 @@ object Azuriranje {
     }
 
     fun smeDaInstalira(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
-            context.packageManager.canRequestPackageInstalls()
+        context.packageManager.canRequestPackageInstalls()
 
     fun otvoriDozvolu(context: Context) {
         context.startActivity(
